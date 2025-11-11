@@ -47,15 +47,28 @@ def expand_traces(patterns):
     return uniq
 
 def write_matrix(run_dir, bins, traces, argsets):
-    """[6] BIN×TRACE×ARGS の直積を matrix.tsv にタブ区切りで書く"""
+    """BIN×TRACE×ARGS の直積を matrix.tsv に書く。
+       配列IDは trace 固定 → bin → args の順で付く。
+       第4列は ARGS の番号(0始まり)。
+    """
+    from pathlib import Path
+    import os, sys
     mpath = Path(run_dir) / "matrix.tsv"
+
+    # args の並び順に 0,1,2... を割り振る
+    arg_index = {a: i for i, a in enumerate(argsets)}
+
     with mpath.open("w") as f:
-        for b in bins:
-            if not os.path.isfile(b):
-                sys.exit(f"バイナリが見つかりません: {b}")
-            for t in traces:
+        # ここがポイント: trace 最外、次に bin、その内側が args
+        for t in traces:
+            if not os.path.exists(t):
+                sys.exit(f"トレースが見つかりません: {t}")
+            for b in bins:
+                if not os.path.isfile(b):
+                    sys.exit(f"バイナリが見つかりません: {b}")
                 for a in argsets:
-                    f.write(f"{b}\t{t}\t{a}\n")
+                    idx = arg_index[a]
+                    f.write(f"{b}\t{t}\t{a}\t{idx}\n")
     return str(mpath)
 
 def submit_in_chunks(run_dir, name, total, res, jobfile):
