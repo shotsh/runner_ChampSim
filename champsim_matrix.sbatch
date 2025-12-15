@@ -1,12 +1,27 @@
 #!/bin/bash
 #SBATCH --job-name=csim_matrix
 #SBATCH --time=08:00:00
+#SBATCH --nodes=1 # Request 1 node
+#SBATCH --ntasks-per-node=2                # Request n tasks(cores) per node
 #SBATCH --cpus-per-task=1
 #SBATCH --ntasks=1
 #SBATCH --mem=8G
 # #SBATCH --partition=grace                   # [00] 必要な時だけ有効化（速度は変わらない）
 #SBATCH --output=logs/%x.%A.%a.out            # [00] 標準出力ログ
 #SBATCH --error=logs/%x.%A.%a.err             # [00] 標準エラーログ
+
+
+## OPTIONAL JOB SPECIFICATIONS
+#SBATCH --account=accountnumber              # Find this account number by running "myproject"
+#SBATCH --mail-type=ALL                      # Send email on all job events
+#SBATCH --mail-user=sshintani@tamu.edu # Send all emails to email_address
+
+# === ここから追加（.bashrc はバッチで読まれないため同じ環境を明示）===
+module load GCCcore/13.2.0 Python/3.11.5
+source "$SCRATCH/venvs/csim/bin/activate"
+export MPLBACKEND=Agg
+# === 追加ここまで ===
+
 set -euo pipefail
 
 # [01] 配列タスクの行を matrix.tsv から取得（0始まり→+1で1始まりへ）
