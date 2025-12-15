@@ -22,3 +22,4 @@ resources:
   mem: 8G
   cpus_per_task: 1
   # chunk: 1000       # 明示したい場合だけ指定
+  # account: <Graceで必要になったらここに入れる>

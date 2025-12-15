@@ -12,7 +12,6 @@
 
 
 ## OPTIONAL JOB SPECIFICATIONS
-#SBATCH --account=accountnumber              # Find this account number by running "myproject"
 #SBATCH --mail-type=ALL                      # Send email on all job events
 #SBATCH --mail-user=sshintani@tamu.edu # Send all emails to email_address
 

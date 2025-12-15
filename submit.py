@@ -14,6 +14,33 @@
 import argparse, os, sys, glob, datetime, subprocess, shlex, re, time
 from pathlib import Path
 
+# ---------------------------
+# subprocess compatibility
+# ---------------------------
+def run_capture(cmd, check=True):
+    """
+    Python 3.6 (universal_newlines) と 3.7+ (text) 両対応で
+    stdout を文字列として取得する。
+    stderr は stdout に統合する。
+
+    check=True の場合、失敗時に sbatch/squeue の出力を表示して終了する。
+    """
+    kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if sys.version_info >= (3, 7):
+        kwargs["text"] = True
+    else:
+        kwargs["universal_newlines"] = True
+
+    p = subprocess.run(cmd, **kwargs)
+    out = p.stdout or ""
+
+    if check and p.returncode != 0:
+        if out.strip():
+            print(out.strip(), file=sys.stderr)
+        raise SystemExit(f"ERROR: command failed (rc={p.returncode}): {cmd}")
+
+    return out
+
 def load_yaml(path):
     """[3] runspec.yaml を辞書にロード"""
     try:
@@ -28,6 +55,7 @@ def expand_traces(patterns):
     """[4] グロブ展開（順序保持・重複除去）"""
     out = []
     for pat in patterns:
+        pat = os.path.expanduser(pat)  # ★ 追加: ~ 展開
         matches = sorted(glob.glob(pat))
         if matches:
             out.extend(os.path.abspath(p) for p in matches if os.path.isfile(p))
@@ -68,11 +96,17 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
     chunk = int(res.get("chunk", 1000))  # 既定 1000
     part = res.get("partition")
     qos  = res.get("qos")
-    account = res.get("account")
+
+    # ★ 変更: account は env を優先（Grace では SLURM_ACCOUNT=132678812657 を設定）
+    account = os.environ.get("SLURM_ACCOUNT") or res.get("account")
+
     nodelist = res.get("nodelist")
     tim  = res.get("time", "08:00:00")
     mem  = res.get("mem", "8G")
     cpus = int(res.get("cpus_per_task", 1))
+    nodes = res.get("nodes")          # optional
+    ntasks = res.get("ntasks")        # optional
+    output = res.get("output")        # optional (例: logs/slurm_%x_%A_%a.out)
 
     sbatch_log = Path(run_dir) / "sbatch_cmd.txt"
     jobs_log   = Path(run_dir) / "sbatch_jobs.txt"
@@ -84,8 +118,9 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
             end = min(start + chunk, total) - 1  # inclusive
             jname = f"{name}_p{piece}" if total > chunk else name
 
-            # オプションは順序を気にせず素直に積む
             cmd = ["sbatch"]
+
+            # リソース指定（必要なものだけ付ける）
             if part:
                 cmd += [f"--partition={part}"]
             if qos:
@@ -94,6 +129,12 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
                 cmd += [f"--account={account}"]
             if nodelist:
                 cmd += [f"--nodelist={nodelist}"]
+            if nodes:
+                cmd += [f"--nodes={nodes}"]
+            if ntasks:
+                cmd += [f"--ntasks={ntasks}"]
+            if output:
+                cmd += [f"--output={output}"]
 
             # 共通オプション
             cmd += [
@@ -110,7 +151,7 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
             print("submit:", line)
             wf.write(line + "\n")
 
-            out = subprocess.run(cmd, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+            out = run_capture(cmd, check=True)
             print(out.strip())
             m = re.search(r"Submitted batch job (\d+)", out)
             if m:
@@ -129,8 +170,7 @@ def wait_for_jobs(job_ids, poll_sec=15):
         return
     print(f"Waiting for jobs to finish: {','.join(job_ids)}")
     while True:
-        out = subprocess.run(["squeue", "-j", ",".join(job_ids)], text=True,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+        out = run_capture(["squeue", "-j", ",".join(job_ids)], check=False)
         lines = [ln for ln in out.splitlines() if ln.strip()]
         if len(lines) <= 1:  # headerのみ
             print("All jobs finished.")
@@ -146,7 +186,6 @@ def summarize_this_run(repo_root, run_dir, baseline="latest",
     out_dir = res_dir / "summary_out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # .txt が1つも無いならスキップ
     txts = list(res_dir.glob("*.txt"))
     if not txts:
         print(f"[summarize] skip: {res_dir} (no .txt)")
@@ -162,14 +201,13 @@ def summarize_this_run(repo_root, run_dir, baseline="latest",
     ]
     print("[summarize] ", " ".join(shlex.quote(x) for x in cmd))
     subprocess.run(cmd, check=True)
-    print(f"[summarize] wrote: {out_dir}/summary.csv, normalized_ipc.csv, *.svg")
+    print(f"[summarize] wrote: {out_dir}/summary.csv, normalized_ipc.csv, *.{img_formats}")
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--recipe", required=True)             # [2]
+    parser.add_argument("--recipe", required=True)
     parser.add_argument("--wait", action="store_true", help="全ジョブ終了を待つ")
     parser.add_argument("--summarize", action="store_true", help="--wait 後にこの run を集計")
-    # まとめ時の軽い調整
     parser.add_argument("--baseline", default="latest")
     parser.add_argument("--label-map", default="resche2:schedcost_on,resche_:schedcost_off,ChampSim:latest")
     parser.add_argument("--img-formats", default="svg")
@@ -177,10 +215,13 @@ def main():
 
     runner_root = Path(__file__).resolve().parent
 
-    spec = load_yaml(args.recipe)                              # [3]
+    spec = load_yaml(args.recipe)
     name = spec.get("name", "csim_run")
-    bins = [os.path.abspath(b) for b in spec.get("bins", [])]
-    traces = expand_traces(spec.get("traces", []))             # [4]
+
+    # ★ 変更: ~ 展開してから abspath
+    bins = [os.path.abspath(os.path.expanduser(b)) for b in spec.get("bins", [])]
+
+    traces = expand_traces(spec.get("traces", []))
     argsets = spec.get("args", [])
     res = spec.get("resources", {})
 
@@ -190,25 +231,25 @@ def main():
 
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     run_dir = runner_root / "runs" / f"{ts}_{name}"
-    (run_dir / "logs").mkdir(parents=True, exist_ok=True)      # [5]
-    (run_dir / "results").mkdir(parents=True, exist_ok=True)   # [5]
+    (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (run_dir / "results").mkdir(parents=True, exist_ok=True)
 
-    mpath = write_matrix(run_dir, bins, traces, argsets)       # [6]
-    total = sum(1 for _ in open(mpath, "r"))                   # [7]
+    mpath = write_matrix(run_dir, bins, traces, argsets)
+    total = sum(1 for _ in open(mpath, "r"))
     print(f"tasks={total} bins={len(bins)} traces={len(traces)} args={len(argsets)}")
 
     jobfile = runner_root / "champsim_matrix.sbatch"
     if not jobfile.is_file():
         sys.exit(f"テンプレートがありません: {jobfile}")
 
-    job_ids = submit_in_chunks(str(run_dir), name, total, res, jobfile)  # [8]
+    job_ids = submit_in_chunks(str(run_dir), name, total, res, jobfile)
     print(f"Run dir: {run_dir}")
 
     if args.wait or args.summarize:
-        wait_for_jobs(job_ids)                                  # [9]
+        wait_for_jobs(job_ids)
 
     if args.summarize:
-        summarize_this_run(runner_root, run_dir,                # [10]
+        summarize_this_run(runner_root, run_dir,
                            baseline=args.baseline,
                            label_map=args.label_map,
                            img_formats=args.img-formats)
