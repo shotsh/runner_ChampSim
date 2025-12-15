@@ -3,12 +3,13 @@ name: my_run
 
 # [1] 実行する ChampSim バイナリの絶対パス
 bins:
-  - /scratch/user/sshintani/champsim-work/ChampSim/bin/champsim
+  - ~/scratch/project/champsim_work/champsim-work/ChampSim/bin/champsim
+
 
 # [1][4] トレースの列挙。明示とグロブを混在可。submit.py が [4] で展開
 traces:
-  - /scratch/user/sshintani/champsim-work/traces/gap/bfs-3.trace.gz
-  - /scratch/user/sshintani/champsim-work/traces/gap/bc-*.trace.gz
+  - ~/scratch/project/champsim-work/traces/gap/bfs-3.trace.gz
+  - ~/scratch/project/champsim-work/traces/gap/bc-*.trace.gz
 
 # [1] 実行時引数のプリセット
 args:

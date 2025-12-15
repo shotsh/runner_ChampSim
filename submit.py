@@ -51,8 +51,6 @@ def write_matrix(run_dir, bins, traces, argsets):
        配列IDは trace 固定 → bin → args の順で付く。
        第4列は ARGS の番号(0始まり)。
     """
-    from pathlib import Path
-    import os, sys
     mpath = Path(run_dir) / "matrix.tsv"
 
     # args の並び順に 0,1,2... を割り振る
@@ -79,6 +77,9 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
     """
     chunk = int(res.get("chunk", 1000))  # 既定 1000
     part = res.get("partition")
+    qos  = res.get("qos")
+    account = res.get("account")
+    nodelist = res.get("nodelist")
     tim  = res.get("time", "08:00:00")
     mem  = res.get("mem", "8G")
     cpus = int(res.get("cpus_per_task", 1))
@@ -89,8 +90,20 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
         for start in range(0, total, chunk):
             end = min(start + chunk, total) - 1  # inclusive
             jname = f"{name}_p{piece}" if total > chunk else name
-            cmd = [
-                "sbatch",
+
+            # オプションは順序を気にせず素直に積む
+            cmd = ["sbatch"]
+            if part:
+                cmd += [f"--partition={part}"]
+            if qos:
+                cmd += [f"--qos={qos}"]
+            if account:
+                cmd += [f"--account={account}"]
+            if nodelist:
+                cmd += [f"--nodelist={nodelist}"]
+
+            # 共通オプション
+            cmd += [
                 f"--array={start}-{end}",
                 f"--time={tim}",
                 f"--mem={mem}",
@@ -99,11 +112,10 @@ def submit_in_chunks(run_dir, name, total, res, jobfile):
                 f"--chdir={run_dir}",
                 str(jobfile),
             ]
-            if part:
-                cmd.insert(1, f"--partition={part}")
+
             line = " ".join(shlex.quote(x) for x in cmd)
-            print("submit:", line)         # [9] 投入コマンドを表示
-            wf.write(line + "\n")          # [9] 再現用に記録
+            print("submit:", line)          # [9] 投入コマンドを表示
+            wf.write(line + "\n")           # [9] 再現用に記録
             subprocess.run(cmd, check=True) # [9] 実際に sbatch 実行
             piece += 1
 
