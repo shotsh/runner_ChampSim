@@ -55,17 +55,17 @@ LAT_L2   = re.compile(r"cpu0->cpu0_L2C AVERAGE MISS LATENCY:\s*([\d.]+) cycles")
 LAT_LLC  = re.compile(r"cpu0->LLC AVERAGE MISS LATENCY:\s*([\d.]+) cycles")
 
 def label_from_name(fname: str, label_map):
+    base = os.path.basename(fname)
     for key, lab in label_map:
-        if key and key in fname:
+        if key and (key in fname or key in base):
             return lab
     return "unknown"
 
 def bench_from_name(fname: str) -> str:
-    # Example: 00_bc-0.trace.gz_ChampSim_0_j17064838.txt -> bc-0
-    m = re.search(r"_([^_/]+)\.trace\.gz_ChampSim", fname)
-    if m:
-        return m.group(1)
-    return os.path.splitext(os.path.basename(fname))[0]
+    # for: 0_wp_..._ChampSim_0_j219721.txt -> 0_wp_...
+    base = os.path.splitext(os.path.basename(fname))[0]
+    base = re.sub(r"_ChampSim.*$", "", base)
+    return base
 
 def mpki(miss, inst):
     try:
@@ -154,7 +154,7 @@ def main():
 
     if not rows:
         print("No rows parsed. Check --glob and input files.")
-        for e in errors:
+        for e in errors[:50]:
             print("WARN:", e)
         return
 
@@ -167,12 +167,13 @@ def main():
         "llc_load_access","llc_load_hit","llc_load_miss","llc_miss_lat","llc_load_mpki",
         "dtlb_access","dtlb_hit","dtlb_miss","dtlb_mpki",
     ]
-    with open(os.path.join(args.outdir, "summary.csv"), "w", newline="") as f:
+    summary_path = os.path.join(args.outdir, "summary.csv")
+    with open(summary_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k) for k in fieldnames})
-    print(os.path.join(args.outdir, "summary.csv"))
+    print(summary_path)
 
     # Per-bench normalization vs baseline
     baseline_label = args.baseline
@@ -195,22 +196,24 @@ def main():
     for cfg, lst in sorted(ratios_by_cfg.items()):
         norm_rows.append({"bench": "__geomean__", "config": cfg, "ipc_norm_vs_"+baseline_label: geomean(lst)})
 
-    with open(os.path.join(args.outdir, "normalized_ipc.csv"), "w", newline="") as f:
+    norm_path = os.path.join(args.outdir, "normalized_ipc.csv")
+    with open(norm_path, "w", newline="") as f:
         keys = ["bench", "config", "ipc_norm_vs_"+baseline_label]
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
         w.writerows(norm_rows)
-    print(os.path.join(args.outdir, "normalized_ipc.csv"))
+    print(norm_path)
 
-    # Plots
+    # Plots (headless)
     try:
+        import matplotlib
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except Exception as e:
         print("matplotlib not available; skipping plots:", e)
         return
 
     # Plot 1: Normalized IPC bar
-    norm_path = os.path.join(args.outdir, "normalized_ipc.csv")
     norm_data = defaultdict(dict)
     with open(norm_path) as f:
         r = csv.DictReader(f)
@@ -244,14 +247,11 @@ def main():
         plt.close()
 
     # Plot 2: IPC vs LLC MPKI scatter
-    with open(os.path.join(args.outdir, "summary.csv")) as f:
-        rows_read = list(csv.DictReader(f))
-
     plt.figure()
     have_any = False
-    for cfg in sorted({row["config"] for row in rows_read}):
+    for cfg in sorted({row["config"] for row in rows}):
         xs, ys = [], []
-        for row in rows_read:
+        for row in rows:
             if row["config"] != cfg:
                 continue
             try:
