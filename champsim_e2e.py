@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 # End-to-end ChampSim log summarizer and plotter
-# - Reads *.txt logs
-# - Extracts IPC, cycles, branch stats, MPKI, miss latencies
-# - Writes summary.csv and normalized_ipc.csv
-# - Saves charts as SVG by default
 
 import re
 import glob
@@ -62,7 +58,7 @@ def label_from_name(fname: str, label_map):
     return "unknown"
 
 def bench_from_name(fname: str) -> str:
-    # for: 0_wp_..._ChampSim_0_j219721.txt -> 0_wp_...
+    # 例: 0_wp_..._ChampSim_0_j219721.txt -> 0_wp_...
     base = os.path.splitext(os.path.basename(fname))[0]
     base = re.sub(r"_ChampSim.*$", "", base)
     return base
@@ -152,6 +148,11 @@ def main():
         rec_out.update(rec)
         rows.append(rec_out)
 
+    if errors:
+        with open(os.path.join(args.outdir, "parse_errors.txt"), "w") as f:
+            for e in errors:
+                f.write(e + "\n")
+
     if not rows:
         print("No rows parsed. Check --glob and input files.")
         for e in errors[:50]:
@@ -204,7 +205,7 @@ def main():
         w.writerows(norm_rows)
     print(norm_path)
 
-    # Plots (headless)
+    # Plots
     try:
         import matplotlib
         matplotlib.use("Agg")
