@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
 """
-最小の送信フロー + オプションで待機と集計
-  [2] CLIで実行
-  [3] runspec.yaml を読み込む
-  [4] トレースのグロブ展開
-  [5] ラン用フォルダを作成
-  [6] 直積を matrix.tsv に書く
-  [7] 総タスク数 N を数える
-  [8] N を既定 chunk 件ずつに分割して sbatch --array 提出（ジョブIDを保存）
-  [9] --wait で全ジョブ終了待ち
- [10] --summarize でこの run の results/*.txt を集計（CSV, SVG）
+submit.py
+- runspec.yaml を読み、matrix.tsv を作り、sbatch --array で実行する
+- デフォルト: afterok 依存の summarize ジョブを自動で投げる（待たない）
+- --summarize: 手元で wait 後に summarize を実行（ブロックする）
+- --no-auto-summarize: submit だけで終了
 
-追加したデバッグ出力:
+デバッグ出力:
 - runs/<run>/submit_debug.log
-- runs/<run>/results/summary_out/diagnostics.txt
-- runs/<run>/results/summary_out/e2e_stdout.txt
+- runs/<run>/results/summary_out/diagnostics.txt (auto/inline summarize時)
+- runs/<run>/results/summary_out/e2e_stdout.txt (auto/inline summarize時)
 """
 
 import argparse, os, sys, glob, datetime, subprocess, shlex, re, time
@@ -63,7 +58,6 @@ def choose_python_exe():
 # Core logic
 # -----------------------
 def load_yaml(path):
-    """[3] runspec.yaml を辞書にロード"""
     try:
         import yaml
     except ImportError:
@@ -73,7 +67,6 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 def expand_traces(patterns):
-    """[4] グロブ展開（順序保持・重複除去）"""
     out = []
     for pat in patterns:
         matches = sorted(glob.glob(pat))
@@ -90,7 +83,6 @@ def expand_traces(patterns):
     return uniq
 
 def write_matrix(run_dir, bins, traces, argsets):
-    """BIN×TRACE×ARGS の直積を matrix.tsv に書く。第4列は ARGS の番号(0始まり)。"""
     mpath = Path(run_dir) / "matrix.tsv"
     arg_index = {a: i for i, a in enumerate(argsets)}
     with mpath.open("w") as f:
@@ -105,25 +97,36 @@ def write_matrix(run_dir, bins, traces, argsets):
                     f.write(f"{b}\t{t}\t{a}\t{idx}\n")
     return str(mpath)
 
-def submit_in_chunks(run_dir, name, total, res, jobfile, debug_log=None):
-    """
-    [8] 総タスク total を chunk ごとに分割して sbatch
-        返り値: 提出した Slurm ジョブIDのリスト
-    """
-    chunk = int(res.get("chunk", 1000))  # 既定 1000
+def sbatch_common_prefix(res):
     part = res.get("partition")
     qos  = res.get("qos")
     account = res.get("account")
     nodelist = res.get("nodelist")
+
+    cmd = ["sbatch"]
+    if part:
+        cmd += [f"--partition={part}"]
+    if qos:
+        cmd += [f"--qos={qos}"]
+    if account:
+        cmd += [f"--account={account}"]
+    if nodelist:
+        cmd += [f"--nodelist={nodelist}"]
+
+    # 環境変数をジョブに渡す（CSIM_VENVがあれば確実に渡す）
+    venv = os.environ.get("CSIM_VENV")
+    if venv:
+        cmd += [f"--export=ALL,CSIM_VENV={venv}"]
+    else:
+        cmd += ["--export=ALL"]
+
+    return cmd
+
+def submit_in_chunks(run_dir, name, total, res, jobfile, debug_log=None):
+    chunk = int(res.get("chunk", 1000))
     tim  = res.get("time", "08:00:00")
     mem  = res.get("mem", "8G")
     cpus = int(res.get("cpus_per_task", 1))
-
-    # sbatch に環境変数を渡す（CSIM_VENVがあれば確実にジョブ側に渡す）
-    export_args = ["--export=ALL"]
-    venv = os.environ.get("CSIM_VENV")
-    if venv:
-        export_args = [f"--export=ALL,CSIM_VENV={venv}"]
 
     sbatch_log = Path(run_dir) / "sbatch_cmd.txt"
     jobs_log   = Path(run_dir) / "sbatch_jobs.txt"
@@ -132,21 +135,10 @@ def submit_in_chunks(run_dir, name, total, res, jobfile, debug_log=None):
     with sbatch_log.open("w") as wf, jobs_log.open("w") as jf:
         piece = 0
         for start in range(0, total, chunk):
-            end = min(start + chunk, total) - 1  # inclusive
+            end = min(start + chunk, total) - 1
             jname = f"{name}_p{piece}" if total > chunk else name
 
-            cmd = ["sbatch"]
-            if part:
-                cmd += [f"--partition={part}"]
-            if qos:
-                cmd += [f"--qos={qos}"]
-            if account:
-                cmd += [f"--account={account}"]
-            if nodelist:
-                cmd += [f"--nodelist={nodelist}"]
-
-            cmd += export_args
-
+            cmd = sbatch_common_prefix(res)
             cmd += [
                 f"--array={start}-{end}",
                 f"--time={tim}",
@@ -192,7 +184,6 @@ def submit_in_chunks(run_dir, name, total, res, jobfile, debug_log=None):
     return job_ids
 
 def wait_for_jobs(job_ids, poll_sec=15, debug_log=None):
-    """[9] すべての job_id が消えるまで待機"""
     if not job_ids:
         return
     msg = f"Waiting for jobs to finish: {','.join(job_ids)}"
@@ -202,14 +193,12 @@ def wait_for_jobs(job_ids, poll_sec=15, debug_log=None):
 
     while True:
         out, rc = run_capture(["squeue", "-j", ",".join(job_ids)], check=False)
-
-        # Python3.6 f-stringの制約回避: 置換は先にやる
         if debug_log and rc != 0:
             safe_out = out.strip().replace("\n", "\\n")
             append_log(debug_log, f"squeue_rc={rc} out={safe_out}")
 
         lines = [ln for ln in out.splitlines() if ln.strip()]
-        if len(lines) <= 1:  # headerのみ
+        if len(lines) <= 1:
             print("All jobs finished.")
             if debug_log:
                 append_log(debug_log, "All jobs finished.")
@@ -219,7 +208,6 @@ def wait_for_jobs(job_ids, poll_sec=15, debug_log=None):
 def summarize_this_run(repo_root, run_dir, baseline="latest",
                        label_map="resche2:schedcost_on,resche_:schedcost_off,ChampSim:latest",
                        img_formats="svg", debug_log=None):
-    """[10] この run の results/*.txt を集計（CSV, SVG）+ デバッグログ出力"""
     e2e = Path(repo_root) / "champsim_e2e.py"
     res_dir = Path(run_dir) / "results"
     out_dir = res_dir / "summary_out"
@@ -293,18 +281,98 @@ def summarize_this_run(repo_root, run_dir, baseline="latest",
     d("[summarize] DONE")
     print(f"[summarize] wrote under: {out_dir}")
 
+def write_summarize_sbatch(runner_root, run_dir, baseline, label_map, img_formats):
+    """
+    afterok 依存で実行する summarize 用 sbatch スクリプトを run_dir に書く
+    """
+    path = Path(run_dir) / "summarize_afterok.sbatch"
+    # bash 側でも venv を拾えるようにする（champsim_matrix.sbatch と同じ優先度）
+    script = f"""#!/bin/bash
+#SBATCH --job-name=csim_summarize
+#SBATCH --output=logs/summarize.%j.out
+#SBATCH --error=logs/summarize.%j.err
+#SBATCH --time=00:30:00
+#SBATCH --mem=2G
+#SBATCH --cpus-per-task=1
+
+set -euo pipefail
+
+RUN_DIR="{run_dir}"
+RUNNER_ROOT="{runner_root}"
+
+mkdir -p "$RUN_DIR/results/summary_out"
+
+# module は無い環境もあるので落とさない
+if command -v module >/dev/null 2>&1; then
+  module -q load GCCcore/13.2.0 2>/dev/null || true
+  module -q load Python/3.11.5  2>/dev/null || true
+fi
+
+VENV_PATH="${{CSIM_VENV:-${{VIRTUAL_ENV:-${{SCRATCH:-$HOME}}/venvs/csim}}}}"
+if [[ -f "${{VENV_PATH}}/bin/activate" ]]; then
+  # shellcheck disable=SC1090
+  source "${{VENV_PATH}}/bin/activate"
+else
+  echo "[INFO] venv not found, skipping: ${{VENV_PATH}}/bin/activate" >&2
+fi
+export MPLBACKEND=Agg
+
+PYEXE="python3"
+if [[ -x "${{VENV_PATH}}/bin/python3" ]]; then
+  PYEXE="${{VENV_PATH}}/bin/python3"
+fi
+
+echo "[auto] hostname=$(hostname)" > "$RUN_DIR/results/summary_out/diagnostics.txt"
+echo "[auto] VENV_PATH=$VENV_PATH" >> "$RUN_DIR/results/summary_out/diagnostics.txt"
+echo "[auto] PYEXE=$PYEXE" >> "$RUN_DIR/results/summary_out/diagnostics.txt"
+ls -l "$RUN_DIR/results" >> "$RUN_DIR/results/summary_out/diagnostics.txt" || true
+
+cd "$RUN_DIR"
+
+"$PYEXE" "$RUNNER_ROOT/champsim_e2e.py" \\
+  --glob "$RUN_DIR/results/*.txt" \\
+  --outdir "$RUN_DIR/results/summary_out" \\
+  --baseline "{baseline}" \\
+  --label-map "{label_map}" \\
+  --img-formats "{img_formats}" \\
+  2>&1 | tee "$RUN_DIR/results/summary_out/e2e_stdout.txt"
+"""
+    path.write_text(script)
+    # 念のため実行権限
+    try:
+        path.chmod(0o755)
+    except Exception:
+        pass
+    return str(path)
+
+def submit_summarize_job(run_dir, res, dep_job_ids, summarize_sbatch, debug_log=None):
+    dep = "afterok:" + ":".join(dep_job_ids)
+    cmd = sbatch_common_prefix(res)
+    cmd += [
+        f"--dependency={dep}",
+        f"--chdir={run_dir}",
+        summarize_sbatch,
+    ]
+    line = " ".join(shlex.quote(x) for x in cmd)
+    if debug_log:
+        append_log(debug_log, f"summarize_sbatch_cmd: {line}")
+    out, rc = run_capture(cmd, check=True)
+    if debug_log:
+        append_log(debug_log, f"summarize_sbatch_rc={rc}")
+        append_log(debug_log, "summarize_sbatch_out: " + out.strip().replace("\n", "\\n"))
+    m = re.search(r"Submitted batch job (\d+)", out)
+    return m.group(1) if m else None
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--recipe", required=True)
-    parser.add_argument("--wait", action="store_true", help="全ジョブ終了を待つ")
-    parser.add_argument("--summarize", action="store_true", help="--wait 後にこの run を集計")
+    parser.add_argument("--wait", action="store_true", help="全ジョブ終了を待つ（submitのみの場合に有効）")
+    parser.add_argument("--summarize", action="store_true", help="wait 後にこの run を集計（ブロックする）")
+    parser.add_argument("--no-auto-summarize", action="store_true", help="デフォルトの afterok 集計ジョブ自動提出を無効化")
     parser.add_argument("--baseline", default="latest")
     parser.add_argument("--label-map", default="resche2:schedcost_on,resche_:schedcost_off,ChampSim:latest")
     parser.add_argument("--img-formats", default="svg")
     args = parser.parse_args()
-
-    if args.summarize:
-        args.wait = True
 
     runner_root = Path(__file__).resolve().parent
 
@@ -326,7 +394,7 @@ def main():
 
     debug_log = run_dir / "submit_debug.log"
     append_log(str(debug_log), f"recipe={args.recipe}")
-    append_log(str(debug_log), f"wait={args.wait} summarize={args.summarize}")
+    append_log(str(debug_log), f"wait={args.wait} summarize={args.summarize} no_auto={args.no_auto_summarize}")
     append_log(str(debug_log), f"runner_root={runner_root}")
     append_log(str(debug_log), f"run_dir={run_dir}")
     append_log(str(debug_log), f"CSIM_VENV={os.environ.get('CSIM_VENV','')}")
@@ -346,10 +414,10 @@ def main():
     print(f"Run dir: {run_dir}")
     append_log(str(debug_log), f"job_ids={','.join(job_ids)}")
 
-    if args.wait:
-        wait_for_jobs(job_ids, debug_log=str(debug_log))
-
+    # inline summarize を要求した場合はブロックして実行
     if args.summarize:
+        args.wait = True
+        wait_for_jobs(job_ids, debug_log=str(debug_log))
         summarize_this_run(
             runner_root, run_dir,
             baseline=args.baseline,
@@ -357,6 +425,27 @@ def main():
             img_formats=args.img_formats,
             debug_log=str(debug_log),
         )
+        return 0
+
+    # wait だけ指定されたら待つだけ（summaryなし）
+    if args.wait:
+        wait_for_jobs(job_ids, debug_log=str(debug_log))
+        return 0
+
+    # デフォルト動作: afterok summarize ジョブを自動で投げる（待たない）
+    if not args.no_auto_summarize:
+        summarize_sbatch = write_summarize_sbatch(
+            str(runner_root), str(run_dir),
+            args.baseline, args.label_map, args.img_formats
+        )
+        summ_jid = submit_summarize_job(str(run_dir), res, job_ids, summarize_sbatch, debug_log=str(debug_log))
+        if summ_jid:
+            print(f"Submitted summarize job: {summ_jid} (afterok on {','.join(job_ids)})")
+            append_log(str(debug_log), f"summarize_job_id={summ_jid}")
+        else:
+            print("WARN: summarize job id could not be parsed")
+            append_log(str(debug_log), "WARN: summarize job id could not be parsed")
+
     return 0
 
 if __name__ == "__main__":
