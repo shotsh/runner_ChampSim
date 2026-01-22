@@ -82,6 +82,27 @@ def expand_traces(patterns):
             uniq.append(p); seen.add(p)
     return uniq
 
+def expand_trace_configs(trace_configs):
+    """
+    trace_configs 形式を展開して (trace, args) のペアリストを返す。
+    同一トレースを異なる args で複数回実行可能（重複排除なし）。
+    trace_configs:
+      - traces: ["*B256*", "*B384*"]
+        args: "--warmup-instructions 102000000 ..."  # 必須
+      - traces: ["*B1024*"]
+        args: "--warmup-instructions 103000000 ..."
+    """
+    pairs = []
+    for i, cfg in enumerate(trace_configs):
+        patterns = cfg.get("traces", [])
+        if "args" not in cfg:
+            sys.exit(f"trace_configs[{i}]: args は必須です")
+        args = cfg["args"]
+        traces = expand_traces(patterns)
+        for t in traces:
+            pairs.append((t, args))
+    return pairs
+
 def write_matrix(run_dir, bins, traces, argsets):
     mpath = Path(run_dir) / "matrix.tsv"
     arg_index = {a: i for i, a in enumerate(argsets)}
@@ -95,6 +116,32 @@ def write_matrix(run_dir, bins, traces, argsets):
                 for a in argsets:
                     idx = arg_index[a]
                     f.write(f"{b}\t{t}\t{a}\t{idx}\n")
+    return str(mpath)
+
+def write_matrix_from_pairs(run_dir, bins, trace_args_pairs):
+    """
+    trace_configs 形式用: (trace, args) ペアからマトリックスを生成。
+    各トレースに対して個別の args が紐づく。
+    """
+    mpath = Path(run_dir) / "matrix.tsv"
+    # args の一意リストを作成してインデックス付け
+    unique_args = []
+    seen_args = set()
+    for _, args in trace_args_pairs:
+        if args not in seen_args:
+            unique_args.append(args)
+            seen_args.add(args)
+    arg_index = {a: i for i, a in enumerate(unique_args)}
+
+    with mpath.open("w") as f:
+        for t, args in trace_args_pairs:
+            if not os.path.exists(t):
+                sys.exit(f"トレースが見つかりません: {t}")
+            for b in bins:
+                if not os.path.isfile(b):
+                    sys.exit(f"バイナリが見つかりません: {b}")
+                idx = arg_index[args]
+                f.write(f"{b}\t{t}\t{args}\t{idx}\n")
     return str(mpath)
 
 def sbatch_common_prefix(res):
@@ -379,13 +426,27 @@ def main():
     spec = load_yaml(args.recipe)
     name = spec.get("name", "csim_run")
     bins = [os.path.abspath(b) for b in spec.get("bins", [])]
-    traces = expand_traces(spec.get("traces", []))
-    argsets = spec.get("args", [])
     res = spec.get("resources", {})
 
+    # trace_configs (新形式) と traces+args (従来形式) を判定
+    trace_configs = spec.get("trace_configs")
+    use_trace_configs = trace_configs is not None
+
+    if use_trace_configs:
+        # 新形式: trace_configs
+        trace_args_pairs = expand_trace_configs(trace_configs)
+        if not trace_args_pairs:
+            sys.exit("trace_configs からトレースが見つかりません")
+        num_traces = len(trace_args_pairs)
+    else:
+        # 従来形式: traces + args
+        traces = expand_traces(spec.get("traces", []))
+        argsets = spec.get("args", [])
+        if not traces:  sys.exit("traces が空です")
+        if not argsets: sys.exit("args が空です")
+        num_traces = len(traces)
+
     if not bins:    sys.exit("bins が空です")
-    if not traces:  sys.exit("traces が空です")
-    if not argsets: sys.exit("args が空です")
 
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     run_dir = runner_root / "runs" / f"{ts}_{name}"
@@ -399,11 +460,18 @@ def main():
     append_log(str(debug_log), f"run_dir={run_dir}")
     append_log(str(debug_log), f"CSIM_VENV={os.environ.get('CSIM_VENV','')}")
     append_log(str(debug_log), f"sys.executable={sys.executable}")
+    append_log(str(debug_log), f"use_trace_configs={use_trace_configs}")
 
-    mpath = write_matrix(run_dir, bins, traces, argsets)
-    total = sum(1 for _ in open(mpath, "r"))
-    print(f"tasks={total} bins={len(bins)} traces={len(traces)} args={len(argsets)}")
-    append_log(str(debug_log), f"tasks={total} bins={len(bins)} traces={len(traces)} args={len(argsets)}")
+    if use_trace_configs:
+        mpath = write_matrix_from_pairs(run_dir, bins, trace_args_pairs)
+        total = sum(1 for _ in open(mpath, "r"))
+        print(f"tasks={total} bins={len(bins)} traces={num_traces} (trace_configs mode)")
+        append_log(str(debug_log), f"tasks={total} bins={len(bins)} traces={num_traces} (trace_configs mode)")
+    else:
+        mpath = write_matrix(run_dir, bins, traces, argsets)
+        total = sum(1 for _ in open(mpath, "r"))
+        print(f"tasks={total} bins={len(bins)} traces={len(traces)} args={len(argsets)}")
+        append_log(str(debug_log), f"tasks={total} bins={len(bins)} traces={len(traces)} args={len(argsets)}")
 
     jobfile = runner_root / "champsim_matrix.sbatch"
     if not jobfile.is_file():

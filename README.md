@@ -66,8 +66,10 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 2. `python3 submit.py --recipe ...` を実行
 3. `submit.py` が YAML を読み込む
 4. `submit.py` がトレースのパターンを glob 展開
+   - 従来形式: `traces` × `args` のマトリックス展開
+   - 新形式: `trace_configs` から (trace, args) ペアを生成
 5. ラン用フォルダ `runs/<日時>_<name>/` を作る
-6. BIN×TRACE×ARGS の直積を `matrix.tsv` に書く
+6. BIN×(TRACE,ARGS) の組み合わせを `matrix.tsv` に書く
 7. 総タスク数 N を数える
 8. N を既定1000件ごとに分割
 9. 各チャンクを `sbatch --array=<start>-<end>` で投入し `sbatch_cmd.txt` に記録
@@ -75,7 +77,7 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 11. 計算ノードで `champsim_matrix.sbatch` が起動
 12. 配列インデックスから `matrix.tsv` の対象行を読む
 13. タブ区切りを BIN, TRACE, ARGS に分解
-14. `srun "$BIN" $ARGS --traces "$TRACE"` を実行し結果を `results/` へ
+14. `srun "$BIN" $ARGS "$TRACE"` を実行し結果を `results/` へ
 15. Slurm の標準ログを `logs/` へ
 16. 進捗は必要に応じて `squeue` で確認
 
@@ -103,8 +105,12 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 
 * `[3]` runspec を読み込み
 * `[4]` glob 展開で実在ファイルに解決
+  - 従来形式: `expand_traces()` で traces を展開
+  - 新形式: `expand_trace_configs()` で trace_configs を展開
 * `[5]` ラン用フォルダと `logs/` `results/` を作成
-* `[6]` 直積を `matrix.tsv` に書く
+* `[6]` 組み合わせを `matrix.tsv` に書く
+  - 従来形式: `write_matrix()` で BIN×TRACE×ARGS の直積
+  - 新形式: `write_matrix_from_pairs()` で BIN×(TRACE,ARGS) ペア
 * `[7]` 総タスク数を算出
 * `[8][9]` 1000件ずつに自動分割し配列で投入、`sbatch_cmd.txt` に記録
 
@@ -114,15 +120,18 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 
 ```
 runs/<日時>_<name>/
-  matrix.tsv          # 1行が1タスク（BIN<TAB>TRACE<TAB>ARGS）
+  matrix.tsv          # 1行が1タスク（BIN<TAB>TRACE<TAB>ARGS<TAB>ARGS_IDX）
   sbatch_cmd.txt      # 投入に使った sbatch コマンドの記録
-  logs/               # Slurmの標準ログ（%x.%A.%a 形式）
+  logs/               # Slurmの標準ログ
+    <name>.<jobid>.<arrayid>.out      # チャンク分割なしの場合
+    <name>.<jobid>.<arrayid>.err
+    <name>_p0.<jobid>.<arrayid>.out   # チャンク分割時（_p0, _p1, ...）
+    <name>_p0.<jobid>.<arrayid>.err
   results/            # ChampSimの出力
-    0__<trace名>.txt
-    1__<trace名>.txt
+    <arrayid>_<trace名>_<repo>_<args_idx>_j<jobid>.txt
 ```
 
-* `results/00__*.txt` の先頭番号は配列インデックス
+* `results/` 内のファイル名は `<配列ID(ゼロ埋め)>_<trace名>_<REPO名>_<ARGS番号>_j<JobID>.txt`
 * 対応する行は `sed -n '<インデックス+1>p' matrix.tsv` で確認できる
 
 ---
@@ -167,6 +176,8 @@ runs/<日時>_<name>/
 
 * `bins が空です / traces が空です / args が空です`
   runspec.yaml の該当セクションを確認。絶対パス推奨
+* `trace_configs からトレースが見つかりません`
+  trace_configs 内の traces パスを確認。glob パターンがマッチしているか確認
 * `テンプレートがありません`
   `champsim_matrix.sbatch` が `submit.py` と同じディレクトリにあるか確認
 * 投入はされたが結果が無い
@@ -176,7 +187,13 @@ runs/<日時>_<name>/
 
 ---
 
-## レシピ例
+## レシピ形式
+
+レシピYAMLには2つの形式があります。
+
+### 従来形式（traces + args）
+
+全トレースに対して全argsの組み合わせを実行（マトリックス展開）。
 
 ```yaml
 name: spec_sample
@@ -193,3 +210,55 @@ resources:
   cpus_per_task: 1
   chunk: 1000
 ```
+
+**実行タスク数**: `bins数 × traces数 × args数`
+
+### 新形式（trace_configs）
+
+トレースごとに個別のargsを指定可能。異なるwarmup/simulation設定が必要な場合に便利。
+
+**注意事項:**
+- `args` は各 trace_config で**必須**（省略するとエラー）
+- 同一トレースを複数の config に記載可能（異なる args で複数回実行される）
+
+```yaml
+name: wp_microbench
+bins:
+  - /home/sshintani/champsim-work/ChampSim/bin/champsim
+
+trace_configs:
+  # 同じ設定のトレースはグループ化できる
+  - traces:
+      - /path/to/B256.trace
+      - /path/to/B384.trace
+      - /path/to/B512.trace
+    args: "--warmup-instructions 102000000 --simulation-instructions 102000000"  # 必須
+
+  # 個別設定
+  - traces:
+      - /path/to/B1024.trace
+    args: "--warmup-instructions 103000000 --simulation-instructions 103000000"
+
+  - traces:
+      - /path/to/B2048.trace
+    args: "--warmup-instructions 105000000 --simulation-instructions 105000000"
+
+  # グロブも使用可能
+  - traces:
+      - /path/to/*B8192*.trace
+    args: "--warmup-instructions 118000000 --simulation-instructions 118000000"
+
+resources:
+  partition: cpu-research
+  qos: olympus-cpu-research
+  time: 08:00:00
+  mem: 8G
+  cpus_per_task: 2
+```
+
+**実行タスク数**: `bins数 × 全trace_configsのトレース合計数`
+
+### 形式の自動判定
+
+- `trace_configs` キーが存在 → 新形式
+- `traces` + `args` キーが存在 → 従来形式
