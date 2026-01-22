@@ -128,10 +128,10 @@ runs/<日時>_<name>/
     <name>_p0.<jobid>.<arrayid>.out   # チャンク分割時（_p0, _p1, ...）
     <name>_p0.<jobid>.<arrayid>.err
   results/            # ChampSimの出力
-    <arrayid>_<trace名>_<repo>_<args_idx>_j<jobid>.txt
+    <arrayid>_<trace名>_<repo>_<bin_name>_<args_idx>_j<jobid>.txt
 ```
 
-* `results/` 内のファイル名は `<配列ID(ゼロ埋め)>_<trace名>_<REPO名>_<ARGS番号>_j<JobID>.txt`
+* `results/` 内のファイル名は `<配列ID(ゼロ埋め)>_<trace名>_<REPO名>_<バイナリ名>_<ARGS番号>_j<JobID>.txt`
 * 対応する行は `sed -n '<インデックス+1>p' matrix.tsv` で確認できる
 
 ---

@@ -50,8 +50,10 @@ ARGIDX=$(printf "%s" "$ROW" | cut -f4 2>/dev/null || true)
 # [03] 結果保存ディレクトリ
 mkdir -p results
 
-# [04] バイナリ系統名（…/ChampSim/bin/champsim → "ChampSim"）
+# [04] バイナリ系統名とバイナリ名
+#      …/ChampSim/bin/champsim → REPO="ChampSim", BIN_NAME="champsim"
 REPO=$(basename "$(dirname "$(dirname "$BIN")")")
+BIN_NAME=$(basename "$BIN")
 TRACE_BASE=$(basename "$TRACE")
 
 # [05] 配列IDのゼロ埋め幅を総タスク数から動的決定
@@ -65,8 +67,31 @@ JID=${SLURM_JOB_ID:-NA}
 JTAG="j${JID}"
 
 # [07] 命名規則:
-#      <配列ID(ゼロ埋め)>_<trace名>_<REPO>_<ARGS番号>_j<JobID>.txt
-OUT="results/${AID_PAD}_${TRACE_BASE}_${REPO}_${ARGIDX}_${JTAG}.txt"
+#      <配列ID(ゼロ埋め)>_<trace名>_<REPO>_<BIN_NAME>_<ARGS番号>_j<JobID>.txt
+OUT="results/${AID_PAD}_${TRACE_BASE}_${REPO}_${BIN_NAME}_${ARGIDX}_${JTAG}.txt"
 
-# [08] 実行
+# [08] 診断情報を stderr に出力（.err ログで確認可能）
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] START task=${SLURM_ARRAY_TASK_ID} node=$(hostname)" >&2
+echo "[INFO] BIN=${BIN}" >&2
+echo "[INFO] TRACE=${TRACE}" >&2
+echo "[INFO] ARGS=${ARGS}" >&2
+echo "[INFO] OUT=${OUT}" >&2
+
+# バイナリの存在確認
+if [[ ! -x "$BIN" ]]; then
+  echo "[ERROR] Binary not found or not executable: $BIN" >&2
+  exit 1
+fi
+
+# トレースファイルの存在確認
+if [[ ! -f "$TRACE" ]]; then
+  echo "[ERROR] Trace file not found: $TRACE" >&2
+  exit 1
+fi
+
+# [09] 実行
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running: srun $BIN $ARGS $TRACE" >&2
 srun "$BIN" $ARGS "$TRACE" > "$OUT"
+EXIT_CODE=$?
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] DONE task=${SLURM_ARRAY_TASK_ID} exit_code=${EXIT_CODE}" >&2
