@@ -46,6 +46,8 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
    cd ~/champsim-work/runner
    python3 submit.py --recipe recipes/runspec.yaml   # [2]
    ```
+   - デフォルトで、計算ジョブ完了後に summarize ジョブを afterok 依存で自動投入します。
+   - summarize を自動提出したくない場合は `--no-auto-summarize` を付ける。
 3. 状況確認
 
    ```
@@ -54,9 +56,22 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 4. 結果確認
 
    ```
-   runs/<日時>_<name>/results/*.txt
-   runs/<日時>_<name>/logs/*.out, *.err
-   ```
+runs/<日時>_<name>/results/*.txt
+runs/<日時>_<name>/logs/*.out, *.err
+```
+
+---
+
+## オプション一覧（必要に応じて）
+
+```
+--wait                 # submit 後にジョブ完了まで待つ（summarize は実行しない）
+--summarize            # wait 後に手元で summarize を実行（ブロックする）
+--no-auto-summarize    # afterok summarize ジョブの自動提出を無効化
+--baseline <name>      # summarize の基準ラベル（default: latest）
+--label-map <map>      # summarize のラベルマップ（default: resche2:..., resche_:..., ChampSim:latest）
+--img-formats <fmt>    # summarize の画像形式（default: svg, カンマ区切りで複数可）
+```
 
 ---
 
@@ -79,7 +94,8 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 13. タブ区切りを BIN, TRACE, ARGS に分解
 14. `srun "$BIN" $ARGS "$TRACE"` を実行し結果を `results/` へ
 15. Slurm の標準ログを `logs/` へ
-16. 進捗は必要に応じて `squeue` で確認
+16. （デフォルト）本体ジョブ完了後に summarize ジョブを afterok 依存で追加投入し `results/summary_out/` に集計を出力
+17. 進捗は必要に応じて `squeue` で確認
 
 ---
 
@@ -90,7 +106,7 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 * `[1]` 編集対象
 * `[4]` `traces:` は glob 展開される
 * `[8][9]` `resources.chunk` で分割幅を変更可
-* `partition` は必要時のみ指定
+* `partition` / `qos` / `account` / `nodelist` は必要時のみ指定（指定すれば sbatch に渡る）
 * `time`, `mem`, `cpus_per_task` はそのまま `sbatch` に渡される
 
 ### champsim_matrix.sbatch
@@ -113,6 +129,7 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
   - 新形式: `write_matrix_from_pairs()` で BIN×(TRACE,ARGS) ペア
 * `[7]` 総タスク数を算出
 * `[8][9]` 1000件ずつに自動分割し配列で投入、`sbatch_cmd.txt` に記録
+* デフォルトで afterok summarize ジョブも投入（`--no-auto-summarize` で無効化、`--summarize` で手元実行）
 
 ---
 
@@ -122,6 +139,9 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 runs/<日時>_<name>/
   matrix.tsv          # 1行が1タスク（BIN<TAB>TRACE<TAB>ARGS<TAB>ARGS_IDX）
   sbatch_cmd.txt      # 投入に使った sbatch コマンドの記録
+  sbatch_jobs.txt     # 送信されたジョブID一覧
+  submit_debug.log    # submit.py のデバッグログ
+  summarize_afterok.sbatch  # 自動生成される summarize 用スクリプト
   logs/               # Slurmの標準ログ
     <name>.<jobid>.<arrayid>.out      # チャンク分割なしの場合
     <name>.<jobid>.<arrayid>.err
@@ -129,6 +149,10 @@ runs/<日時>_<name>/
     <name>_p0.<jobid>.<arrayid>.err
   results/            # ChampSimの出力
     <arrayid>_<trace名>_<repo>_<bin_name>_<args_idx>_j<jobid>.txt
+    summary_out/      # summarize の出力（auto/inline 共通）
+      diagnostics.txt
+      e2e_stdout.txt
+      *.svg / *.png / *.csv（img-formats に応じる）
 ```
 
 * `results/` 内のファイル名は `<配列ID(ゼロ埋め)>_<trace名>_<REPO名>_<バイナリ名>_<ARGS番号>_j<JobID>.txt`
@@ -205,6 +229,10 @@ traces:
 args:
   - "--warmup_instructions 100000000 --simulation_instructions 100000000"
 resources:
+  partition: cpu-research      # 任意
+  qos: olympus-cpu-research    # 任意
+  account: myaccount           # 任意
+  nodelist: node01             # 任意
   time: 08:00:00
   mem: 8G
   cpus_per_task: 1
@@ -262,3 +290,8 @@ resources:
 
 - `trace_configs` キーが存在 → 新形式
 - `traces` + `args` キーが存在 → 従来形式
+
+### resources の補足
+
+- `time` 既定 08:00:00、`mem` 既定 8G、`cpus_per_task` 既定 1、`chunk` 既定 1000
+- `partition` / `qos` / `account` / `nodelist` は必要な場合のみ指定（指定時はそのまま sbatch に渡される）
