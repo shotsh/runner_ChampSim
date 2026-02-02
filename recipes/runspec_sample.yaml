@@ -1,0 +1,80 @@
+# =============================================================================
+# Sample Recipe for ChampSim Batch Runner
+# =============================================================================
+# This file demonstrates both recipe formats: legacy and trace_configs.
+# Copy this file and modify paths/settings for your environment.
+#
+# Two formats are supported:
+#   1. Legacy format: traces + args (matrix expansion)
+#   2. New format: trace_configs (individual args per trace)
+#
+# Format is auto-detected: if 'trace_configs' key exists, new format is used.
+# =============================================================================
+
+name: sample_run
+
+# -----------------------------------------------------------------------------
+# Binary paths (required)
+# -----------------------------------------------------------------------------
+# Absolute paths to ChampSim binaries to test
+bins:
+  - /path/to/champsim/bin/champsim
+  # - /path/to/champsim/bin/champsim_variant  # Add more binaries to compare
+
+# =============================================================================
+# OPTION 1: Legacy Format (traces + args)
+# =============================================================================
+# Use this when all traces should run with the same args.
+# Total tasks = len(bins) x len(traces) x len(args)
+#
+# Uncomment below to use legacy format:
+# -----------------------------------------------------------------------------
+# traces:
+#   - /path/to/traces/benchmark1.trace.gz
+#   - /path/to/traces/benchmark2.trace.gz
+#   - /path/to/traces/*.trace.gz              # Glob patterns supported
+#
+# args:
+#   - "--warmup-instructions 50000000 --simulation-instructions 100000000"
+#   - "--warmup-instructions 100000000 --simulation-instructions 200000000"
+
+# =============================================================================
+# OPTION 2: New Format (trace_configs)
+# =============================================================================
+# Use this when different traces need different warmup/simulation settings.
+# Total tasks = len(bins) x (sum of traces across all configs)
+# -----------------------------------------------------------------------------
+trace_configs:
+  # Group 1: Short traces with smaller warmup
+  - traces:
+      - /path/to/traces/short_bench1.trace.gz
+      - /path/to/traces/short_bench2.trace.gz
+    args: "--warmup-instructions 50000000 --simulation-instructions 100000000"
+
+  # Group 2: Medium traces
+  - traces:
+      - /path/to/traces/medium_bench.trace.gz
+    args: "--warmup-instructions 100000000 --simulation-instructions 200000000"
+
+  # Group 3: Long traces with larger warmup
+  - traces:
+      - /path/to/traces/long_bench*.trace.gz  # Glob patterns supported
+    args: "--warmup-instructions 200000000 --simulation-instructions 500000000"
+
+# -----------------------------------------------------------------------------
+# Resource settings (optional - defaults shown)
+# -----------------------------------------------------------------------------
+resources:
+  # SLURM partition/queue settings (uncomment and modify as needed)
+  # partition: cpu-research      # SLURM partition name
+  # qos: default                 # Quality of Service
+  # account: my-account          # Account/allocation name
+  # nodelist: node01             # Specific node(s) to use
+
+  # Job resource limits
+  time: 08:00:00                 # Wall time limit (HH:MM:SS)
+  mem: 8G                        # Memory per task
+  cpus_per_task: 1               # CPU cores per task
+
+  # Array job settings
+  # chunk: 1000                  # Max array size per submission (default: 1000)
