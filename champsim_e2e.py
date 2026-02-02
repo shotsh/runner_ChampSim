@@ -58,7 +58,7 @@ def label_from_name(fname: str, label_map):
     return "unknown"
 
 def bench_from_name(fname: str) -> str:
-    # 例: 0_wp_..._ChampSim_0_j219721.txt -> 0_wp_...
+    # Example: 0_wp_..._ChampSim_0_j219721.txt -> 0_wp_...
     base = os.path.splitext(os.path.basename(fname))[0]
     base = re.sub(r"_ChampSim.*$", "", base)
     return base

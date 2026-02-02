@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 submit.py
-- runspec.yaml を読み、matrix.tsv を作り、sbatch --array で実行する
-- デフォルト: afterok 依存の summarize ジョブを自動で投げる（待たない）
-- --summarize: 手元で wait 後に summarize を実行（ブロックする）
-- --no-auto-summarize: submit だけで終了
+- Read runspec.yaml, create matrix.tsv, and execute with sbatch --array
+- Default: Automatically submit afterok-dependent summarize job (non-blocking)
+- --summarize: Run summarize locally after wait (blocking)
+- --no-auto-summarize: Submit only, no summarize
 
-デバッグ出力:
+Debug output:
 - runs/<run>/submit_debug.log
-- runs/<run>/results/summary_out/diagnostics.txt (auto/inline summarize時)
-- runs/<run>/results/summary_out/e2e_stdout.txt (auto/inline summarize時)
+- runs/<run>/results/summary_out/diagnostics.txt (auto/inline summarize)
+- runs/<run>/results/summary_out/e2e_stdout.txt (auto/inline summarize)
 """
 
 import argparse, os, sys, glob, datetime, subprocess, shlex, re, time
@@ -61,7 +61,7 @@ def load_yaml(path):
     try:
         import yaml
     except ImportError:
-        print("PyYAML を入れてください: pip install --user pyyaml", file=sys.stderr)
+        print("Please install PyYAML: pip install --user pyyaml", file=sys.stderr)
         sys.exit(1)
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -84,11 +84,11 @@ def expand_traces(patterns):
 
 def expand_trace_configs(trace_configs):
     """
-    trace_configs 形式を展開して (trace, args) のペアリストを返す。
-    同一トレースを異なる args で複数回実行可能（重複排除なし）。
+    Expand trace_configs format and return a list of (trace, args) pairs.
+    Same trace can be executed multiple times with different args (no deduplication).
     trace_configs:
       - traces: ["*B256*", "*B384*"]
-        args: "--warmup-instructions 102000000 ..."  # 必須
+        args: "--warmup-instructions 102000000 ..."  # Required
       - traces: ["*B1024*"]
         args: "--warmup-instructions 103000000 ..."
     """
@@ -96,7 +96,7 @@ def expand_trace_configs(trace_configs):
     for i, cfg in enumerate(trace_configs):
         patterns = cfg.get("traces", [])
         if "args" not in cfg:
-            sys.exit(f"trace_configs[{i}]: args は必須です")
+            sys.exit(f"trace_configs[{i}]: args is required")
         args = cfg["args"]
         traces = expand_traces(patterns)
         for t in traces:
@@ -109,10 +109,10 @@ def write_matrix(run_dir, bins, traces, argsets):
     with mpath.open("w") as f:
         for t in traces:
             if not os.path.exists(t):
-                sys.exit(f"トレースが見つかりません: {t}")
+                sys.exit(f"Trace not found: {t}")
             for b in bins:
                 if not os.path.isfile(b):
-                    sys.exit(f"バイナリが見つかりません: {b}")
+                    sys.exit(f"Binary not found: {b}")
                 for a in argsets:
                     idx = arg_index[a]
                     f.write(f"{b}\t{t}\t{a}\t{idx}\n")
@@ -120,11 +120,11 @@ def write_matrix(run_dir, bins, traces, argsets):
 
 def write_matrix_from_pairs(run_dir, bins, trace_args_pairs):
     """
-    trace_configs 形式用: (trace, args) ペアからマトリックスを生成。
-    各トレースに対して個別の args が紐づく。
+    For trace_configs format: Generate matrix from (trace, args) pairs.
+    Each trace has its own associated args.
     """
     mpath = Path(run_dir) / "matrix.tsv"
-    # args の一意リストを作成してインデックス付け
+    # Create unique list of args and index them
     unique_args = []
     seen_args = set()
     for _, args in trace_args_pairs:
@@ -136,10 +136,10 @@ def write_matrix_from_pairs(run_dir, bins, trace_args_pairs):
     with mpath.open("w") as f:
         for t, args in trace_args_pairs:
             if not os.path.exists(t):
-                sys.exit(f"トレースが見つかりません: {t}")
+                sys.exit(f"Trace not found: {t}")
             for b in bins:
                 if not os.path.isfile(b):
-                    sys.exit(f"バイナリが見つかりません: {b}")
+                    sys.exit(f"Binary not found: {b}")
                 idx = arg_index[args]
                 f.write(f"{b}\t{t}\t{args}\t{idx}\n")
     return str(mpath)
@@ -160,7 +160,7 @@ def sbatch_common_prefix(res):
     if nodelist:
         cmd += [f"--nodelist={nodelist}"]
 
-    # 環境変数をジョブに渡す（CSIM_VENVがあれば確実に渡す）
+    # Pass environment variables to job (ensure CSIM_VENV is passed if set)
     venv = os.environ.get("CSIM_VENV")
     if venv:
         cmd += [f"--export=ALL,CSIM_VENV={venv}"]
@@ -223,7 +223,7 @@ def submit_in_chunks(run_dir, name, total, res, jobfile, debug_log=None):
                 job_ids.append(jid)
                 jf.write(jid + "\n")
             else:
-                print("WARN: ジョブIDを取得できませんでした", file=sys.stderr)
+                print("WARN: Could not retrieve job ID", file=sys.stderr)
                 if debug_log:
                     append_log(debug_log, "WARN: could not parse job id from sbatch output")
             piece += 1
@@ -330,10 +330,10 @@ def summarize_this_run(repo_root, run_dir, baseline="latest",
 
 def write_summarize_sbatch(runner_root, run_dir, baseline, label_map, img_formats):
     """
-    afterok 依存で実行する summarize 用 sbatch スクリプトを run_dir に書く
+    Write sbatch script for summarize job with afterok dependency to run_dir
     """
     path = Path(run_dir) / "summarize_afterok.sbatch"
-    # bash 側でも venv を拾えるようにする（champsim_matrix.sbatch と同じ優先度）
+    # Enable venv in bash with same priority as champsim_matrix.sbatch
     script = f"""#!/bin/bash
 #SBATCH --job-name=csim_summarize
 #SBATCH --output=logs/summarize.%j.out
@@ -385,7 +385,7 @@ cd "$RUN_DIR"
   2>&1 | tee "$RUN_DIR/results/summary_out/e2e_stdout.txt"
 """
     path.write_text(script)
-    # 念のため実行権限
+    # Set executable permission just in case
     try:
         path.chmod(0o755)
     except Exception:
@@ -413,9 +413,9 @@ def submit_summarize_job(run_dir, res, dep_job_ids, summarize_sbatch, debug_log=
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--recipe", required=True)
-    parser.add_argument("--wait", action="store_true", help="全ジョブ終了を待つ（submitのみの場合に有効）")
-    parser.add_argument("--summarize", action="store_true", help="wait 後にこの run を集計（ブロックする）")
-    parser.add_argument("--no-auto-summarize", action="store_true", help="デフォルトの afterok 集計ジョブ自動提出を無効化")
+    parser.add_argument("--wait", action="store_true", help="Wait for all jobs to finish (effective for submit only)")
+    parser.add_argument("--summarize", action="store_true", help="Summarize this run after wait (blocking)")
+    parser.add_argument("--no-auto-summarize", action="store_true", help="Disable automatic afterok summarize job submission")
     parser.add_argument("--baseline", default="latest")
     parser.add_argument("--label-map", default="resche2:schedcost_on,resche_:schedcost_off,ChampSim:latest")
     parser.add_argument("--img-formats", default="svg")
@@ -428,25 +428,25 @@ def main():
     bins = [os.path.abspath(b) for b in spec.get("bins", [])]
     res = spec.get("resources", {})
 
-    # trace_configs (新形式) と traces+args (従来形式) を判定
+    # Determine trace_configs (new format) vs traces+args (legacy format)
     trace_configs = spec.get("trace_configs")
     use_trace_configs = trace_configs is not None
 
     if use_trace_configs:
-        # 新形式: trace_configs
+        # New format: trace_configs
         trace_args_pairs = expand_trace_configs(trace_configs)
         if not trace_args_pairs:
-            sys.exit("trace_configs からトレースが見つかりません")
+            sys.exit("No traces found from trace_configs")
         num_traces = len(trace_args_pairs)
     else:
-        # 従来形式: traces + args
+        # Legacy format: traces + args
         traces = expand_traces(spec.get("traces", []))
         argsets = spec.get("args", [])
-        if not traces:  sys.exit("traces が空です")
-        if not argsets: sys.exit("args が空です")
+        if not traces:  sys.exit("traces is empty")
+        if not argsets: sys.exit("args is empty")
         num_traces = len(traces)
 
-    if not bins:    sys.exit("bins が空です")
+    if not bins:    sys.exit("bins is empty")
 
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     run_dir = runner_root / "runs" / f"{ts}_{name}"
@@ -475,14 +475,14 @@ def main():
 
     jobfile = runner_root / "champsim_matrix.sbatch"
     if not jobfile.is_file():
-        sys.exit(f"テンプレートがありません: {jobfile}")
+        sys.exit(f"Template not found: {jobfile}")
     append_log(str(debug_log), f"jobfile={jobfile}")
 
     job_ids = submit_in_chunks(str(run_dir), name, total, res, jobfile, debug_log=str(debug_log))
     print(f"Run dir: {run_dir}")
     append_log(str(debug_log), f"job_ids={','.join(job_ids)}")
 
-    # inline summarize を要求した場合はブロックして実行
+    # If inline summarize is requested, block and execute
     if args.summarize:
         args.wait = True
         wait_for_jobs(job_ids, debug_log=str(debug_log))
@@ -495,12 +495,12 @@ def main():
         )
         return 0
 
-    # wait だけ指定されたら待つだけ（summaryなし）
+    # If only wait is specified, just wait (no summary)
     if args.wait:
         wait_for_jobs(job_ids, debug_log=str(debug_log))
         return 0
 
-    # デフォルト動作: afterok summarize ジョブを自動で投げる（待たない）
+    # Default behavior: Automatically submit afterok summarize job (non-blocking)
     if not args.no_auto_summarize:
         summarize_sbatch = write_summarize_sbatch(
             str(runner_root), str(run_dir),

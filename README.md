@@ -1,21 +1,21 @@
 # runner README
 
-ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ランナーです。
-設定は1枚のYAMLを書き、`submit.py`で配列ジョブを投げ、結果はランごとのフォルダにまとまります。
-コード内コメントと同じ番号を使って処理の流れを対応付けています。
+A minimal runner for mass execution of ChampSim on Slurm environments like Grace.
+Configure using a single YAML file, submit array jobs with `submit.py`, and results are organized per-run in dedicated folders.
+Code comments use matching numbers to correlate processing flow.
 
 ---
 
-## ディレクトリ構成
+## Directory Structure
 
 ```
 ~/champsim-work/runner/
-  submit.py                 # 送信スクリプト
-  champsim_matrix.sbatch    # 実行テンプレ（Slurmバッチ）
+  submit.py                 # Submission script
+  champsim_matrix.sbatch    # Execution template (Slurm batch)
   recipes/
-    runspec.yaml            # 実験レシピ（編集するのは基本ここ）
+    runspec.yaml            # Experiment recipe (edit this primarily)
   runs/
-    <日時>_<name>/          # 送信ごとに自動生成（結果が入る）
+    <timestamp>_<name>/     # Auto-generated per submission (contains results)
       matrix.tsv
       sbatch_cmd.txt
       logs/
@@ -24,171 +24,171 @@ ChampSimの大量実行をGraceなどのSlurm環境で回すための最小ラ�
 
 ---
 
-## 前提
+## Prerequisites
 
-* Python 3 系
+* Python 3.x
 * PyYAML
 
   ```
   pip install --user pyyaml
   ```
-* Slurm 環境でジョブ投入が可能
-  `squeue -u $USER` などが動くこと
+* Slurm environment with job submission capability
+  Commands like `squeue -u $USER` should work
 
 ---
 
-## クイックスタート
+## Quick Start
 
-1. `recipes/runspec.yaml` を編集する `[1]`
-2. 送信
+1. Edit `recipes/runspec.yaml` `[1]`
+2. Submit
 
    ```
    cd ~/champsim-work/runner
    python3 submit.py --recipe recipes/runspec.yaml   # [2]
    ```
-   - デフォルトで、計算ジョブ完了後に summarize ジョブを afterok 依存で自動投入します。
-   - summarize を自動提出したくない場合は `--no-auto-summarize` を付ける。
-3. 状況確認
+   - By default, a summarize job is automatically submitted with afterok dependency after compute jobs complete.
+   - Use `--no-auto-summarize` to disable automatic summarize submission.
+3. Monitor status
 
    ```
-   squeue -u $USER                                   # 監視は手動
+   squeue -u $USER                                   # Manual monitoring
    ```
-4. 結果確認
+4. Check results
 
    ```
-runs/<日時>_<name>/results/*.txt
-runs/<日時>_<name>/logs/*.out, *.err
+runs/<timestamp>_<name>/results/*.txt
+runs/<timestamp>_<name>/logs/*.out, *.err
 ```
 
 ---
 
-## オプション一覧（必要に応じて）
+## Options (as needed)
 
 ```
---wait                 # submit 後にジョブ完了まで待つ（summarize は実行しない）
---summarize            # wait 後に手元で summarize を実行（ブロックする）
---no-auto-summarize    # afterok summarize ジョブの自動提出を無効化
---baseline <name>      # summarize の基準ラベル（default: latest）
---label-map <map>      # summarize のラベルマップ（default: resche2:..., resche_:..., ChampSim:latest）
---img-formats <fmt>    # summarize の画像形式（default: svg, カンマ区切りで複数可）
+--wait                 # Wait for job completion after submit (does not run summarize)
+--summarize            # Run summarize locally after wait (blocking)
+--no-auto-summarize    # Disable automatic afterok summarize job submission
+--baseline <name>      # Baseline label for summarize (default: latest)
+--label-map <map>      # Label map for summarize (default: resche2:..., resche_:..., ChampSim:latest)
+--img-formats <fmt>    # Image formats for summarize (default: svg, comma-separated for multiple)
 ```
 
 ---
 
-## 全体パイプライン（番号付き）
+## Overall Pipeline (numbered)
 
-1. あなたが `recipes/runspec.yaml` を編集
-2. `python3 submit.py --recipe ...` を実行
-3. `submit.py` が YAML を読み込む
-4. `submit.py` がトレースのパターンを glob 展開
-   - 従来形式: `traces` × `args` のマトリックス展開
-   - 新形式: `trace_configs` から (trace, args) ペアを生成
-5. ラン用フォルダ `runs/<日時>_<name>/` を作る
-6. BIN×(TRACE,ARGS) の組み合わせを `matrix.tsv` に書く
-7. 総タスク数 N を数える
-8. N を既定1000件ごとに分割
-9. 各チャンクを `sbatch --array=<start>-<end>` で投入し `sbatch_cmd.txt` に記録
-10. Slurm が配列をキューイングし各タスクに `SLURM_ARRAY_TASK_ID` を付与
-11. 計算ノードで `champsim_matrix.sbatch` が起動
-12. 配列インデックスから `matrix.tsv` の対象行を読む
-13. タブ区切りを BIN, TRACE, ARGS に分解
-14. `srun "$BIN" $ARGS "$TRACE"` を実行し結果を `results/` へ
-15. Slurm の標準ログを `logs/` へ
-16. （デフォルト）本体ジョブ完了後に summarize ジョブを afterok 依存で追加投入し `results/summary_out/` に集計を出力
-17. 進捗は必要に応じて `squeue` で確認
+1. You edit `recipes/runspec.yaml`
+2. Run `python3 submit.py --recipe ...`
+3. `submit.py` reads the YAML
+4. `submit.py` expands trace patterns via glob
+   - Legacy format: Matrix expansion of `traces` × `args`
+   - New format: Generate (trace, args) pairs from `trace_configs`
+5. Create run folder `runs/<timestamp>_<name>/`
+6. Write BIN×(TRACE,ARGS) combinations to `matrix.tsv`
+7. Count total tasks N
+8. Split N into chunks of 1000 by default
+9. Submit each chunk with `sbatch --array=<start>-<end>` and record in `sbatch_cmd.txt`
+10. Slurm queues the array and assigns `SLURM_ARRAY_TASK_ID` to each task
+11. `champsim_matrix.sbatch` starts on compute node
+12. Read target row from `matrix.tsv` based on array index
+13. Parse tab-separated fields into BIN, TRACE, ARGS
+14. Execute `srun "$BIN" $ARGS "$TRACE"` and save results to `results/`
+15. Slurm logs saved to `logs/`
+16. (Default) After main jobs complete, submit summarize job with afterok dependency, output to `results/summary_out/`
+17. Monitor progress with `squeue` as needed
 
 ---
 
-## ファイル別の番号対応
+## File-by-File Number Reference
 
 ### recipes/runspec.yaml
 
-* `[1]` 編集対象
-* `[4]` `traces:` は glob 展開される
-* `[8][9]` `resources.chunk` で分割幅を変更可
-* `partition` / `qos` / `account` / `nodelist` は必要時のみ指定（指定すれば sbatch に渡る）
-* `time`, `mem`, `cpus_per_task` はそのまま `sbatch` に渡される
+* `[1]` Edit target
+* `[4]` `traces:` are glob-expanded
+* `[8][9]` Change chunk size with `resources.chunk`
+* `partition` / `qos` / `account` / `nodelist` specified only when needed (passed to sbatch)
+* `time`, `mem`, `cpus_per_task` are passed directly to `sbatch`
 
 ### champsim_matrix.sbatch
 
-* `[10]` `SLURM_ARRAY_TASK_ID` はSlurmが自動で与える配列インデックス
-* `[12]` 対象行を `sed` で取り出す
-* `[13]` `cut -f1,2,3-` で BIN, TRACE, ARGS を取得
-* `[14]` `srun` で ChampSim を実行し `results/` に保存
-* `[15]` `%x.%A.%a` でログファイルを一意化
+* `[10]` `SLURM_ARRAY_TASK_ID` is the array index automatically provided by Slurm
+* `[12]` Target row extracted with `sed`
+* `[13]` `cut -f1,2,3-` extracts BIN, TRACE, ARGS
+* `[14]` `srun` executes ChampSim and saves to `results/`
+* `[15]` `%x.%A.%a` makes log filenames unique
 
 ### submit.py
 
-* `[3]` runspec を読み込み
-* `[4]` glob 展開で実在ファイルに解決
-  - 従来形式: `expand_traces()` で traces を展開
-  - 新形式: `expand_trace_configs()` で trace_configs を展開
-* `[5]` ラン用フォルダと `logs/` `results/` を作成
-* `[6]` 組み合わせを `matrix.tsv` に書く
-  - 従来形式: `write_matrix()` で BIN×TRACE×ARGS の直積
-  - 新形式: `write_matrix_from_pairs()` で BIN×(TRACE,ARGS) ペア
-* `[7]` 総タスク数を算出
-* `[8][9]` 1000件ずつに自動分割し配列で投入、`sbatch_cmd.txt` に記録
-* デフォルトで afterok summarize ジョブも投入（`--no-auto-summarize` で無効化、`--summarize` で手元実行）
+* `[3]` Load runspec
+* `[4]` Resolve to actual files via glob expansion
+  - Legacy format: `expand_traces()` expands traces
+  - New format: `expand_trace_configs()` expands trace_configs
+* `[5]` Create run folder with `logs/` and `results/`
+* `[6]` Write combinations to `matrix.tsv`
+  - Legacy format: `write_matrix()` for BIN×TRACE×ARGS cartesian product
+  - New format: `write_matrix_from_pairs()` for BIN×(TRACE,ARGS) pairs
+* `[7]` Calculate total task count
+* `[8][9]` Auto-split into 1000 per chunk and submit as array, record in `sbatch_cmd.txt`
+* By default also submits afterok summarize job (`--no-auto-summarize` to disable, `--summarize` to run locally)
 
 ---
 
-## 出力物の見方
+## Understanding Output Files
 
 ```
-runs/<日時>_<name>/
-  matrix.tsv          # 1行が1タスク（BIN<TAB>TRACE<TAB>ARGS<TAB>ARGS_IDX）
-  sbatch_cmd.txt      # 投入に使った sbatch コマンドの記録
-  sbatch_jobs.txt     # 送信されたジョブID一覧
-  submit_debug.log    # submit.py のデバッグログ
-  summarize_afterok.sbatch  # 自動生成される summarize 用スクリプト
-  logs/               # Slurmの標準ログ
-    <name>.<jobid>.<arrayid>.out      # チャンク分割なしの場合
+runs/<timestamp>_<name>/
+  matrix.tsv          # One line per task (BIN<TAB>TRACE<TAB>ARGS<TAB>ARGS_IDX)
+  sbatch_cmd.txt      # Record of sbatch commands used for submission
+  sbatch_jobs.txt     # List of submitted job IDs
+  submit_debug.log    # Debug log from submit.py
+  summarize_afterok.sbatch  # Auto-generated summarize script
+  logs/               # Slurm standard logs
+    <name>.<jobid>.<arrayid>.out      # Without chunk splitting
     <name>.<jobid>.<arrayid>.err
-    <name>_p0.<jobid>.<arrayid>.out   # チャンク分割時（_p0, _p1, ...）
+    <name>_p0.<jobid>.<arrayid>.out   # With chunk splitting (_p0, _p1, ...)
     <name>_p0.<jobid>.<arrayid>.err
-  results/            # ChampSimの出力
-    <arrayid>_<trace名>_<repo>_<bin_name>_<args_idx>_j<jobid>.txt
-    summary_out/      # summarize の出力（auto/inline 共通）
+  results/            # ChampSim output
+    <arrayid>_<tracename>_<repo>_<bin_name>_<args_idx>_j<jobid>.txt
+    summary_out/      # Summarize output (auto/inline shared)
       diagnostics.txt
       e2e_stdout.txt
-      *.svg / *.png / *.csv（img-formats に応じる）
+      *.svg / *.png / *.csv (depending on img-formats)
 ```
 
-* `results/` 内のファイル名は `<配列ID(ゼロ埋め)>_<trace名>_<REPO名>_<バイナリ名>_<ARGS番号>_j<JobID>.txt`
-* 対応する行は `sed -n '<インデックス+1>p' matrix.tsv` で確認できる
+* Filenames in `results/` follow: `<array_id(zero-padded)>_<trace_name>_<REPO_name>_<binary_name>_<ARGS_number>_j<JobID>.txt`
+* Corresponding row can be found with `sed -n '<index+1>p' matrix.tsv`
 
 ---
 
-## よくある質問
+## FAQ
 
-* **TSVとは**
-  Tab Separated Values の略。CSVに似たタブ区切りのテキスト表
-* **globとは**
-  `*` や `?` `[]` を使うファイル名パターン展開のこと
-  例 `/path/gap/bc-*.trace.gz`
-* **SLURM_ARRAY_TASK_IDは自分で定義するのか**
-  いいえ。配列ジョブを使うとSlurmが各タスクに自動で渡す
-* **大量投入は大丈夫か**
-  既定で1000件ずつに分割して配列投入するので、サイトの配列上限と整合する
-  上限が小さいサイトでは `resources.chunk` を下げる
+* **What is TSV?**
+  Tab Separated Values. A tab-delimited text table similar to CSV
+* **What is glob?**
+  Filename pattern expansion using `*`, `?`, `[]`
+  Example: `/path/gap/bc-*.trace.gz`
+* **Do I define SLURM_ARRAY_TASK_ID myself?**
+  No. Slurm automatically provides it to each task when using array jobs
+* **Is mass submission safe?**
+  By default, jobs are split into chunks of 1000 and submitted as arrays to comply with site array limits
+  For sites with smaller limits, reduce `resources.chunk`
 
 ---
 
-## 監視と運用ヒント
+## Monitoring and Operations Tips
 
-* 監視
+* Monitoring
 
   ```
   squeue -u $USER
   squeue -u $USER -o "%.18i %.9P %.8j %.8T %.10M %.9l %.6D %R" | grep <name>
   ```
-* キュー状態
+* Queue status
 
   ```
   sinfo
   ```
-* サイトの配列上限
+* Site array limit
 
   ```
   scontrol show config | grep -i MaxArraySize
@@ -196,28 +196,28 @@ runs/<日時>_<name>/
 
 ---
 
-## トラブルシュート
+## Troubleshooting
 
-* `bins が空です / traces が空です / args が空です`
-  runspec.yaml の該当セクションを確認。絶対パス推奨
-* `trace_configs からトレースが見つかりません`
-  trace_configs 内の traces パスを確認。glob パターンがマッチしているか確認
-* `テンプレートがありません`
-  `champsim_matrix.sbatch` が `submit.py` と同じディレクトリにあるか確認
-* 投入はされたが結果が無い
-  `logs/*.err` を確認。トレースパスや権限を見直す
-* 配列上限に当たる
-  `resources.chunk` を上限以下の値に下げる
+* `bins is empty / traces is empty / args is empty`
+  Check the corresponding section in runspec.yaml. Absolute paths recommended
+* `No traces found from trace_configs`
+  Check traces paths in trace_configs. Verify glob patterns match
+* `Template not found`
+  Verify `champsim_matrix.sbatch` is in the same directory as `submit.py`
+* Jobs submitted but no results
+  Check `logs/*.err`. Review trace paths and permissions
+* Hit array limit
+  Lower `resources.chunk` to below the limit
 
 ---
 
-## レシピ形式
+## Recipe Format
 
-レシピYAMLには2つの形式があります。
+There are two recipe YAML formats.
 
-### 従来形式（traces + args）
+### Legacy Format (traces + args)
 
-全トレースに対して全argsの組み合わせを実行（マトリックス展開）。
+Execute all combinations of traces × args (matrix expansion).
 
 ```yaml
 name: spec_sample
@@ -229,25 +229,25 @@ traces:
 args:
   - "--warmup_instructions 100000000 --simulation_instructions 100000000"
 resources:
-  partition: cpu-research      # 任意
-  qos: olympus-cpu-research    # 任意
-  account: myaccount           # 任意
-  nodelist: node01             # 任意
+  partition: cpu-research      # Optional
+  qos: olympus-cpu-research    # Optional
+  account: myaccount           # Optional
+  nodelist: node01             # Optional
   time: 08:00:00
   mem: 8G
   cpus_per_task: 1
   chunk: 1000
 ```
 
-**実行タスク数**: `bins数 × traces数 × args数`
+**Total tasks**: `bins count × traces count × args count`
 
-### 新形式（trace_configs）
+### New Format (trace_configs)
 
-トレースごとに個別のargsを指定可能。異なるwarmup/simulation設定が必要な場合に便利。
+Specify individual args per trace. Useful when different warmup/simulation settings are needed.
 
-**注意事項:**
-- `args` は各 trace_config で**必須**（省略するとエラー）
-- 同一トレースを複数の config に記載可能（異なる args で複数回実行される）
+**Notes:**
+- `args` is **required** for each trace_config (error if omitted)
+- Same trace can be listed in multiple configs (executed multiple times with different args)
 
 ```yaml
 name: wp_microbench
@@ -255,14 +255,14 @@ bins:
   - /home/sshintani/champsim-work/ChampSim/bin/champsim
 
 trace_configs:
-  # 同じ設定のトレースはグループ化できる
+  # Traces with same settings can be grouped
   - traces:
       - /path/to/B256.trace
       - /path/to/B384.trace
       - /path/to/B512.trace
-    args: "--warmup-instructions 102000000 --simulation-instructions 102000000"  # 必須
+    args: "--warmup-instructions 102000000 --simulation-instructions 102000000"  # Required
 
-  # 個別設定
+  # Individual settings
   - traces:
       - /path/to/B1024.trace
     args: "--warmup-instructions 103000000 --simulation-instructions 103000000"
@@ -271,7 +271,7 @@ trace_configs:
       - /path/to/B2048.trace
     args: "--warmup-instructions 105000000 --simulation-instructions 105000000"
 
-  # グロブも使用可能
+  # Globs are also supported
   - traces:
       - /path/to/*B8192*.trace
     args: "--warmup-instructions 118000000 --simulation-instructions 118000000"
@@ -284,14 +284,14 @@ resources:
   cpus_per_task: 2
 ```
 
-**実行タスク数**: `bins数 × 全trace_configsのトレース合計数`
+**Total tasks**: `bins count × total traces across all trace_configs`
 
-### 形式の自動判定
+### Format Auto-Detection
 
-- `trace_configs` キーが存在 → 新形式
-- `traces` + `args` キーが存在 → 従来形式
+- `trace_configs` key exists → New format
+- `traces` + `args` keys exist → Legacy format
 
-### resources の補足
+### Resources Notes
 
-- `time` 既定 08:00:00、`mem` 既定 8G、`cpus_per_task` 既定 1、`chunk` 既定 1000
-- `partition` / `qos` / `account` / `nodelist` は必要な場合のみ指定（指定時はそのまま sbatch に渡される）
+- `time` default 08:00:00, `mem` default 8G, `cpus_per_task` default 1, `chunk` default 1000
+- `partition` / `qos` / `account` / `nodelist` specified only when needed (passed directly to sbatch)
