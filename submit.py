@@ -424,7 +424,9 @@ def main():
     runner_root = Path(__file__).resolve().parent
 
     spec = load_yaml(args.recipe)
-    name = spec.get("name", "csim_run")
+    if "name" in spec:
+        print(f"[WARN] 'name' field in recipe is deprecated and ignored; using recipe filename instead")
+    name = Path(args.recipe).stem
     bins = [os.path.abspath(b) for b in spec.get("bins", [])]
     res = spec.get("resources", {})
 

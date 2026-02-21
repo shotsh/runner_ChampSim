@@ -21,13 +21,15 @@ Summarizer behavior and CSV schema are defined in `SUMMARY_SPEC.md`.
 
 ## Recipe YAML Format
 
+> **Note:** The `name` field is deprecated. Run directory names are now derived
+> automatically from the recipe filename stem. If `name` is present in a recipe,
+> it is ignored and a warning is printed.
+
 ### Legacy Format (traces + args)
 
 Execute all combinations of traces × args (matrix expansion).
 
 ```yaml
-name: my_run
-
 bins:
   - /path/to/champsim
 
@@ -60,8 +62,6 @@ Specify individual args per trace. Traces with same settings can be grouped.
 - Same trace can be listed in multiple configs (executed multiple times with different args)
 
 ```yaml
-name: wp_20260122
-
 bins:
   - /path/to/champsim
 
@@ -112,19 +112,21 @@ resources:
 
 ## Output Directory Structure
 
+Run directory name is derived from the recipe filename stem (e.g. `my_recipe.yaml` → `my_recipe`).
+
 ```
 runs/
-└── 2026-01-22_123456_my_run/
+└── 2026-01-22_123456_my_recipe/
     ├── matrix.tsv           # Execution matrix
     ├── sbatch_cmd.txt       # sbatch command record
     ├── sbatch_jobs.txt      # Submitted job IDs
     ├── submit_debug.log     # Debug log
     ├── summarize_afterok.sbatch  # Auto-generated summarize script
     ├── logs/
-    │   ├── <name>.<jobid>.<arrayid>.out       # Without chunk splitting
-    │   ├── <name>.<jobid>.<arrayid>.err
-    │   ├── <name>_p0.<jobid>.<arrayid>.out    # With chunk splitting (_p0, _p1, ...)
-    │   └── <name>_p0.<jobid>.<arrayid>.err
+    │   ├── <recipe>.<jobid>.<arrayid>.out       # Without chunk splitting
+    │   ├── <recipe>.<jobid>.<arrayid>.err
+    │   ├── <recipe>_p0.<jobid>.<arrayid>.out    # With chunk splitting (_p0, _p1, ...)
+    │   └── <recipe>_p0.<jobid>.<arrayid>.err
     └── results/
         ├── <arrayid>_<trace>_<repo>_<bin_name>_<args_idx>_j<jobid>.txt
         └── summary_out/     # Summarize results
