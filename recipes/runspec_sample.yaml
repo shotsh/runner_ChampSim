@@ -72,7 +72,7 @@ resources:
   # nodelist: node01             # Specific node(s) to use
 
   # Job resource limits
-  time: 08:00:00                 # Wall time limit (HH:MM:SS)
+  time: 7-00:00:00                 # Wall time limit (D-HH:MM:SS)
   mem: 8G                        # Memory per task
   cpus_per_task: 1               # CPU cores per task
 
