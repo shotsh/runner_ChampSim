@@ -64,6 +64,11 @@
 判定補足:
 
 - `WRONG-PATH` 統計行（`ACCESS:` 等を含む完全形式）の存在を判定に使う。文字列単独ヒットは不可
+- シグネチャの具体パターン（Python 正規表現）:
+  ```
+  ^(?:cpu0_\w+|LLC) WRONG-PATH\s+ACCESS:
+  ```
+  `LLC WRONG-PATH ACCESS:` のみでは不十分。WP 形式ログでは `cpu0_L1D WRONG-PATH ACCESS:` 等、各キャッシュレベルにも同行が存在するため、いずれかのレベルへのマッチで判定する。
 - `unknown` の場合は `parse_errors.csv` に `unknown_format` を記録して行スキップ
 
 ### 4.2 `wp_mode`
@@ -388,11 +393,11 @@ CSV ヘッダ固定:
 | `{lv}_wp_useful` | wp | 同行 `USEFULL:` （typo はログ準拠） |
 | `{lv}_wp_fill` | wp | 同行 `FILL:` |
 | `{lv}_wp_useless` | wp | 同行 `USELESS:` |
-| `{lv}_pollution` | wp | `{LV} POLLUTION:` の比率値 |
-| `{lv}_pol_wp_fill` | wp | 同行 `WP_FILL:` |
-| `{lv}_pol_wp_miss` | wp | 同行 `WP_MISS:` |
-| `{lv}_pol_cp_fill` | wp | 同行 `CP_FILL:` |
-| `{lv}_pol_cp_miss` | wp | 同行 `CP_MISS:` |
+| `{lv}_pollution` | wp | `{LV} POLLUTION:` の比率値（WP OFF 時は **空欄**） |
+| `{lv}_pol_wp_fill` | wp | 同行 `WP_FILL:`（WP OFF 時は空欄） |
+| `{lv}_pol_wp_miss` | wp | 同行 `WP_MISS:`（WP OFF 時は空欄） |
+| `{lv}_pol_cp_fill` | wp | 同行 `CP_FILL:`（WP OFF 時は 0 を保持） |
+| `{lv}_pol_cp_miss` | wp | 同行 `CP_MISS:`（WP OFF 時も保持、CP-path miss の主要指標） |
 | `{lv}_data_req` | wp | `{LV} DATA REQ:` の total |
 | `{lv}_data_hit` | wp | 同行 `HIT:` |
 | `{lv}_data_miss` | wp | 同行 `MISS:` |
@@ -463,13 +468,20 @@ G7 DRAM:          2
 
 ## 14. テスト観点（最低限）
 
-- normal ログ（完全）
-- wp_capable + wp_mode=on（完全）
-- wp_capable + wp_mode=off（完全）
-- ROI 欠損ログ（スキップ）
-- ROI あり・一部統計欠損ログ（行保持）
-- 途中打ち切りログ
-- 空ファイル
+| テスト観点 | 実施状況 |
+|-----------|---------|
+| normal ログ（完全） | ✓ 確認済み（10 ファイル、2026-01-21 run） |
+| wp_capable + wp_mode=on（完全） | ✓ 確認済み（8 ベンチ、2026-02-11 run） |
+| wp_capable + wp_mode=off（完全） | ✓ 確認済み（8 ベンチ、2026-02-11 run） |
+| ROI 欠損ログ（スキップ） | コードレベルで処理あり（実ログ未確認） |
+| ROI あり・一部統計欠損ログ（行保持） | コードレベルで処理あり（実ログ未確認） |
+| 途中打ち切りログ | コードレベルで処理あり（実ログ未確認） |
+| 空ファイル | コードレベルで処理あり（実ログ未確認） |
+
+確認済み項目の検証内容:
+- 183 列数の一致を assert で保証
+- 14〜18 項目の raw ログ値 vs CSV 値スポットチェック（全 OK）
+- WP OFF 時の抑制ルール（WP 活動フィールド空欄、CP-path フィールド保持）を確認
 
 ---
 
