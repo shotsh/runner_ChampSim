@@ -437,12 +437,12 @@ WP 専用列は列ごと出力しない。
 | `{lv}_pol_wp_miss` | wp | 同行 `WP_MISS:`（WP OFF 時は空欄） |
 | `{lv}_pol_cp_fill` | wp | 同行 `CP_FILL:`（WP OFF 時は 0 を保持） |
 | `{lv}_pol_cp_miss` | wp | 同行 `CP_MISS:`（WP OFF 時も保持、CP-path miss の主要指標） |
-| `{lv}_data_req` | wp | `{LV} DATA REQ:` の total |
-| `{lv}_data_hit` | wp | 同行 `HIT:` |
-| `{lv}_data_miss` | wp | 同行 `MISS:` |
-| `{lv}_data_wp_req` | wp | 同行 `WP_REQ:` |
-| `{lv}_data_wp_hit` | wp | 同行 `WP_HIT:` |
-| `{lv}_data_wp_miss` | wp | 同行 `WP_MISS:` |
+| `{lv}_data_req` | wp | `{LV} DATA REQ:` の total（WP OFF 時も実値を保持） |
+| `{lv}_data_hit` | wp | 同行 `HIT:`（WP OFF 時も実値を保持） |
+| `{lv}_data_miss` | wp | 同行 `MISS:`（WP OFF 時も実値を保持） |
+| `{lv}_data_wp_req` | wp | 同行 `WP_REQ:`（WP OFF 時は空欄） |
+| `{lv}_data_wp_hit` | wp | 同行 `WP_HIT:`（WP OFF 時は空欄） |
+| `{lv}_data_wp_miss` | wp | 同行 `WP_MISS:`（WP OFF 時は空欄） |
 | `{lv}_miss_lat` | both | `{LV} AVERAGE MISS LATENCY:` または `AVERAGE DATA MISS LATENCY:` |
 | `{lv}_wp_miss_lat` | wp | `{LV} AVERAGE WP DATA MISS LATENCY:` |
 | `{lv}_cp_miss_lat` | wp | `{LV} AVERAGE CP DATA MISS LATENCY:` |
@@ -464,7 +464,9 @@ WP 専用列は列ごと出力しない。
 | `{tlv}_wp_access` | wp | `{TLV} WRONG-PATH ACCESS:` |
 | `{tlv}_wp_useful` | wp | 同行 `USEFULL:` |
 | `{tlv}_wp_useless` | wp | 同行 `USELESS:` |
-| `{tlv}_miss_lat` | both | `{TLV} AVERAGE DATA MISS LATENCY:` または `AVERAGE MISS LATENCY:` |
+
+注: WP ログの TLB WRONG-PATH 行には `FILL:` フィールドも存在するが、現版スキーマでは意図的に除外している（§17.5 参照）。
+| `{tlv}_miss_lat` | both | WP 形式: `{TLV} AVERAGE DATA MISS LATENCY:`、normal 形式: `{TLV} AVERAGE MISS LATENCY:` |
 | `{tlv}_wp_miss_lat` | wp | `{TLV} AVERAGE WP DATA MISS LATENCY:` |
 | `{tlv}_cp_miss_lat` | wp | `{TLV} AVERAGE CP DATA MISS LATENCY:` |
 
@@ -529,3 +531,115 @@ G7 DRAM:          2
 - 手動モード指定なしで両形式を自動処理する
 - `submit.py` 側で summarize スクリプト切替を要求しない
 - 既存運用に対する利用者操作を増やさない
+
+---
+
+## 17. ログ構造差分：Normal ChampSim vs WP ChampSim
+
+### 17.1 概観
+
+| 項目 | Normal ChampSim | WP ChampSim |
+|------|:---:|:---:|
+| ログ行数（目安） | ~112 行 | ~743 行 |
+| CSV 列数（スキーマ） | 82 列 | 183 列 |
+| 統計ラインプレフィックス | `cpu0->cpu0_{LV}` / `cpu0->LLC` | `cpu0_{LV}` / `LLC` |
+| WP 専用セクション | なし | G2 WP insts, G4 Pipeline, 各レベルの WP 統計行 |
+
+両形式はバイナリが異なる（`log_format` で自動判別）。
+WP ChampSim バイナリは WP OFF 実行でも WP 統計行を全レベルに出力する（値は 0、詳細は §17.4）。
+
+---
+
+### 17.2 各セクションの対応表
+
+| セクション | Normal | WP（ON/OFF 共通） |
+|-----------|:------:|:-----------------:|
+| ROI 行（IPC / inst / cycles） | ✓ | ✓ |
+| `wp_cycles` / `wrong_path_insts` 等 | — | ✓（WP ON 時のみ非ゼロ） |
+| `instr_foot_print` / `data_foot_print` | — | ✓ |
+| Branch 統計 | ✓ | ✓ |
+| Execute Only WP/CP Cycles 等（G4） | — | ✓ |
+| ROB Full/Empty Cycles/Events | — | ✓ |
+| Resteer Events / Penalty | — | ✓ |
+| `{LV} LOAD/PREFETCH ACCESS:` 等 | ✓ | ✓ |
+| `{LV} PREFETCH REQUESTED:` | ✓ | ✓ |
+| `{LV} WRONG-PATH ACCESS:` | — | ✓（WP OFF 時は全フィールド 0） |
+| `{LV} POLLUTION:` | — | ✓（WP OFF 時: WP_FILL/WP_MISS/比率=0、CP_MISS=実値） |
+| `{LV} INSTR REQ:` / `DATA REQ:` | — | ✓（WP OFF 時: WP_* = 0、CP 側は実値） |
+| `AVERAGE MISS LATENCY:` | ✓（1 行のみ） | ✓（WP 形式でも出力、ただしスキーマ採用外） |
+| `AVERAGE DATA MISS LATENCY:` | — | ✓（サマライザの `miss_lat` に採用） |
+| `AVERAGE WP DATA MISS LATENCY:` | — | ✓（WP OFF 時は -nan） |
+| `AVERAGE CP DATA MISS LATENCY:` | — | ✓ |
+| DRAM Statistics | ✓ | ✓ |
+
+---
+
+### 17.3 キャッシュ統計行の詳細比較（1 レベルあたり）
+
+#### Normal ChampSim の主要行（例: L1D）
+
+```
+cpu0->cpu0_L1D LOAD         ACCESS: N  HIT: N  MISS: N
+cpu0->cpu0_L1D PREFETCH     ACCESS: N  HIT: N  MISS: N
+cpu0->cpu0_L1D PREFETCH REQUESTED: N  ISSUED: N  USEFUL: N  USELESS: N
+cpu0->cpu0_L1D AVERAGE MISS LATENCY: N cycles
+（TOTAL / RFO / WRITE / TRANSLATION 行は集計対象外）
+```
+
+#### WP ChampSim の主要行（例: L1D、WP 専用行を追記）
+
+```
+cpu0_L1D LOAD         ACCESS: N  HIT: N  MISS: N
+cpu0_L1D PREFETCH     ACCESS: N  HIT: N  MISS: N
+cpu0_L1D PREFETCH REQUESTED: N  ISSUED: N  USEFUL: N  USELESS: N
+cpu0_L1D WRONG-PATH ACCESS: N  LOAD: N  USEFULL: N  FILL: N  USELESS: N   ← WP専用
+cpu0_L1D POLLUTION: R  WP_FILL: N  WP_MISS: N  CP_FILL: N  CP_MISS: N     ← WP専用
+cpu0_L1D INSTR REQ: N  HIT: N  MISS: N  WP_REQ: N  WP_HIT: N  WP_MISS: N ← WP専用
+cpu0_L1D DATA REQ:  N  HIT: N  MISS: N  WP_REQ: N  WP_HIT: N  WP_MISS: N ← WP専用
+cpu0_L1D AVERAGE MISS LATENCY: N cycles            （集計対象外: WP 含む全体平均）
+cpu0_L1D AVERAGE DATA MISS LATENCY: N cycles       ← miss_lat に採用
+cpu0_L1D AVERAGE WP DATA MISS LATENCY: N cycles    ← wp_miss_lat に採用
+cpu0_L1D AVERAGE CP DATA MISS LATENCY: N cycles    ← cp_miss_lat に採用
+（AVERAGE INSTR MISS / WP INSTR MISS / CP INSTR MISS LATENCY は集計対象外）
+```
+
+---
+
+### 17.4 WP OFF 時の WP 統計行の値（WP ChampSim バイナリ使用時）
+
+WP ChampSim バイナリを WP 無効で実行した場合、WP 統計行は出力されるが値は次の通り：
+
+| ログ行 | WP OFF 時の実値 |
+|--------|----------------|
+| `WRONG-PATH ACCESS:` | 全フィールド 0 |
+| `POLLUTION:` | 比率 = 0、`WP_FILL` = 0、`WP_MISS` = 0、`CP_FILL` = 0、**`CP_MISS` = 実値** |
+| `DATA REQ:` | `data_req/hit/miss` = 実値、`WP_*` = 0 |
+| `AVERAGE WP DATA MISS LATENCY:` | `-nan`（ゼロ除算） |
+
+サマライザの抑制ルール（§16 G5）との対応：
+
+| フィールド群 | WP OFF 時のサマライザ動作 |
+|-------------|--------------------------|
+| `wp_access/useful/fill/useless` | → 空欄（None に抑制） |
+| `pollution / pol_wp_fill / pol_wp_miss` | → 空欄（None に抑制） |
+| `pol_cp_fill` | → 0 を保持（ログ実値が 0） |
+| `pol_cp_miss` | → 実値を保持（CP-path miss の主要指標） |
+| `data_req / data_hit / data_miss` | → 実値を保持（WP OFF でも出力される） |
+| `data_wp_req / data_wp_hit / data_wp_miss` | → 空欄（None に抑制） |
+
+---
+
+### 17.5 TLB 統計の差分
+
+キャッシュと同様に WP 統計行が追加されるが、G6 スキーマは省略版を採用している：
+
+| フィールド | キャッシュ（G5） | TLB（G6） | 備考 |
+|-----------|:---:|:---:|------|
+| `wp_access` | ✓ | ✓ | |
+| `wp_useful` | ✓ | ✓ | |
+| `wp_fill` | ✓ | **除外** | WP ログの WRONG-PATH 行に `FILL:` は存在するが現版スキーマ対象外 |
+| `wp_useless` | ✓ | ✓ | |
+| `pollution` / `pol_*` | ✓ | **除外** | WP ログに POLLUTION 行は存在するが現版スキーマ対象外 |
+| `data_req` / `data_*` | ✓ | **除外** | WP ログに DATA REQ 行は存在するが現版スキーマ対象外 |
+
+TLB の POLLUTION・DATA REQ・`wp_fill` は現版では集計対象外。必要な場合は G6 スキーマ拡張を検討する。
