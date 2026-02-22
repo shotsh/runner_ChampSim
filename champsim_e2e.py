@@ -118,6 +118,14 @@ _CACHE_FIELDS = [
     "miss_lat", "wp_miss_lat", "cp_miss_lat",
 ]
 
+# "both" subset of _CACHE_FIELDS (12 fields; no WP-only fields)
+_CACHE_FIELDS_BOTH = [
+    "load_access", "load_hit", "load_miss", "load_mpki",
+    "pf_access", "pf_hit", "pf_miss",
+    "pf_requested", "pf_issued", "pf_useful", "pf_useless",
+    "miss_lat",
+]
+
 # 10 fields per TLB (dtlb/itlb/stlb)
 _TLB_FIELDS = [
     "access", "hit", "miss", "mpki",
@@ -125,6 +133,13 @@ _TLB_FIELDS = [
     "miss_lat", "wp_miss_lat", "cp_miss_lat",
 ]
 
+# "both" subset of _TLB_FIELDS (5 fields)
+_TLB_FIELDS_BOTH = [
+    "access", "hit", "miss", "mpki",
+    "miss_lat",
+]
+
+# ── Full schema: 183 columns (wp_capable logs) ────────────────────────────────
 FULL_FIELDNAMES = (
     # G1 Identifiers (6)
     ["bench", "config", "file", "log_format", "wp_mode", "parse_warnings"]
@@ -150,6 +165,28 @@ FULL_FIELDNAMES = (
 
 assert len(FULL_FIELDNAMES) == 183, f"Expected 183 columns, got {len(FULL_FIELDNAMES)}"
 
+# ── Normal schema: 82 columns (normal ChampSim logs, "both" fields only) ──────
+NORMAL_FIELDNAMES = (
+    # G1 Identifiers (6)
+    ["bench", "config", "file", "log_format", "wp_mode", "parse_warnings"]
+    # G2 ROI core only (3; WP-only fields omitted)
+    + ["cycles", "inst", "ipc"]
+    # G3 Branch (8)
+    + ["branch_acc_percent", "branch_mpki",
+       "br_direct_jump_mpki", "br_indirect_mpki", "br_conditional_mpki",
+       "br_direct_call_mpki", "br_indirect_call_mpki", "br_return_mpki"]
+    # G4 omitted (WP binary only)
+    # G5 Cache × 4 levels (12 × 4 = 48, "both" fields only)
+    + [f"{lv}_{f}" for lv in ["l1d", "l1i", "l2c", "llc"] for f in _CACHE_FIELDS_BOTH]
+    # G6 TLB × 3 levels (5 × 3 = 15, "both" fields only)
+    + [f"{tlv}_{f}" for tlv in ["dtlb", "itlb", "stlb"] for f in _TLB_FIELDS_BOTH]
+    # G7 DRAM (2)
+    + ["dram_rq_row_hit", "dram_rq_row_miss"]
+)
+
+assert len(NORMAL_FIELDNAMES) == 82, f"Expected 82 columns, got {len(NORMAL_FIELDNAMES)}"
+
+# ── Summary schemas ───────────────────────────────────────────────────────────
 SUMMARY_FIELDNAMES = [
     # Identifiers
     "bench", "config", "log_format", "wp_mode", "parse_warnings",
@@ -160,11 +197,25 @@ SUMMARY_FIELDNAMES = [
     # LLC
     "llc_load_miss", "llc_load_mpki", "llc_miss_lat",
     "llc_pf_useful", "llc_pf_useless",
-    # WP-specific (empty for normal format)
+    # WP-specific
     "llc_wp_access", "llc_wp_useful",
     "llc_pol_cp_miss",
     "l2c_pf_useful", "l2c_pf_useless",
     "l2c_pollution",
+]
+
+NORMAL_SUMMARY_FIELDNAMES = [
+    # Identifiers
+    "bench", "config", "log_format", "wp_mode", "parse_warnings",
+    # ROI
+    "cycles", "inst", "ipc",
+    # Branch
+    "branch_mpki",
+    # LLC
+    "llc_load_miss", "llc_load_mpki", "llc_miss_lat",
+    "llc_pf_useful", "llc_pf_useless",
+    # L2C
+    "l2c_pf_useful", "l2c_pf_useless",
 ]
 
 ERROR_FIELDNAMES = ["file", "bench", "config", "error_code", "detail"]
@@ -664,22 +715,29 @@ def main():
             print(f"  ERROR [{e['error_code']}] {e['file']}: {e['detail']}")
         return
 
-    # full_metrics.csv (spec §6.1) – 183 columns
+    # Auto-select column schema based on detected log formats (spec §9.2)
+    # If any row is wp_capable → full 183-column schema
+    # If all rows are normal  → reduced 82-column schema (WP-only columns omitted)
+    has_wp = any(r.get("log_format") == "wp_capable" for r in rows)
+    full_fields = FULL_FIELDNAMES if has_wp else NORMAL_FIELDNAMES
+    sum_fields  = SUMMARY_FIELDNAMES if has_wp else NORMAL_SUMMARY_FIELDNAMES
+
+    # full_metrics.csv (spec §6.1)
     full_path = os.path.join(args.outdir, "full_metrics.csv")
     with open(full_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FULL_FIELDNAMES, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=full_fields, extrasaction="ignore")
         w.writeheader()
         for r in rows:
-            w.writerow({k: fmt(r.get(k), k) for k in FULL_FIELDNAMES})
+            w.writerow({k: fmt(r.get(k), k) for k in full_fields})
     print(full_path)
 
     # summary.csv (spec §6.2)
     sum_path = os.path.join(args.outdir, "summary.csv")
     with open(sum_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=SUMMARY_FIELDNAMES, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=sum_fields, extrasaction="ignore")
         w.writeheader()
         for r in rows:
-            w.writerow({k: fmt(r.get(k), k) for k in SUMMARY_FIELDNAMES})
+            w.writerow({k: fmt(r.get(k), k) for k in sum_fields})
     print(sum_path)
 
     # normalized_ipc.csv (legacy feature, spec §6.3)

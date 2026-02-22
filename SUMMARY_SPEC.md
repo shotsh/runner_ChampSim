@@ -191,30 +191,50 @@ miss カウントの範囲:
 
 ### 9.2 列順・グループ構成
 
-`full_metrics.csv` は 183 列、以下の順でグループ化する。
+`full_metrics.csv` の列数・列定義は、処理対象ログの形式に応じて自動切り替えする。
 
-| グループ | 列数 | 対象フォーマット |
-|---------|------|----------------|
-| 識別 | 6 | 両方 |
-| ROI コア + WP insts | 11 | 一部 WP のみ |
-| Branch | 8 | 両方 |
-| Pipeline / Execute | 10 | WP のみ |
-| L1D キャッシュ | 29 | 一部 WP のみ |
-| L1I キャッシュ | 29 | 一部 WP のみ |
-| L2C キャッシュ | 29 | 一部 WP のみ |
-| LLC キャッシュ | 29 | 一部 WP のみ |
-| DTLB | 10 | 一部 WP のみ |
-| ITLB | 10 | 一部 WP のみ |
-| STLB | 10 | 一部 WP のみ |
-| DRAM | 2 | 両方 |
+#### パース後の自動選択ルール
+
+- パース対象ログに `wp_capable` 行が **1行でも含まれる** → **フルスキーマ（183列）**
+- パース対象ログが **全行 `normal`** → **ノーマルスキーマ（82列）**
+
+この判定はスクリプト実行時に自動で行われ、ユーザ操作は不要。
+
+#### フルスキーマ（183列、wp_capable ログ用）
+
+| グループ | 列数 | 備考 |
+|---------|------|------|
+| 識別 | 6 | 全行共通 |
+| ROI コア + WP insts | 11 | WP 専用フィールドは normal 行で空欄 |
+| Branch | 8 | 全行共通 |
+| Pipeline / Execute | 10 | WP バイナリのみ（normal 行で空欄） |
+| L1D / L1I / L2C / LLC キャッシュ | 29 × 4 = 116 | WP 専用フィールドは WP OFF / normal で空欄 |
+| DTLB / ITLB / STLB | 10 × 3 = 30 | 同上 |
+| DRAM | 2 | 全行共通 |
 | **合計** | **183** | |
+
+#### ノーマルスキーマ（82列、normal ログ専用）
+
+WP 専用列（G2 WP insts・G4 Pipeline・G5/G6 の WP フィールド）を**列ごと出力しない**。
+ノーマルログに実際に存在するフィールドのみで構成する。
+
+| グループ | 列数 | 内容 |
+|---------|------|------|
+| 識別 | 6 | |
+| ROI コア | 3 | `cycles`, `inst`, `ipc`（`wp_cycles` 等は列自体なし） |
+| Branch | 8 | 全フィールド |
+| Pipeline | 0 | 列なし |
+| L1D / L1I / L2C / LLC キャッシュ | 12 × 4 = 48 | `load_*`, `pf_*`, `miss_lat` のみ |
+| DTLB / ITLB / STLB | 5 × 3 = 15 | `access`, `hit`, `miss`, `mpki`, `miss_lat` のみ |
+| DRAM | 2 | |
+| **合計** | **82** | |
 
 ### 9.3 互換性
 
-- 列順は固定
+- 列順は各スキーマ内で固定
 - 新規列は原則末尾追加
-- 欠損・非対応（normal 形式の WP 専用列等）は空文字 `""` で統一
-- `summary.csv` は原則 `full_metrics.csv` の部分集合
+- スキーマ選択は自動（`log_format` による判定）
+- `summary.csv` は `full_metrics.csv` と同じスキーマ判定に従う部分集合
 
 ---
 
@@ -264,26 +284,48 @@ CSV ヘッダ固定:
 
 ## 12. summary 最小列
 
-`summary.csv` には最低限、以下を含める。
+`summary.csv` は §9.2 のスキーマ自動選択と連動し、**フルスキーマ時**と**ノーマルスキーマ時**で列定義が変わる。
 
-**識別（全形式）**
+### フルスキーマ時（wp_capable ログあり）
+
+**識別**
 - `bench, config, log_format, wp_mode, parse_warnings`
 
-**ROI コア（全形式）**
+**ROI コア**
 - `cycles, wp_cycles, inst, ipc`
 
-**Branch（全形式）**
+**Branch**
 - `branch_mpki`
 
-**LLC（全形式）**
+**LLC**
 - `llc_load_miss, llc_load_mpki, llc_miss_lat`
-- `llc_pf_useful, llc_pf_useless`（prefetch quality）
+- `llc_pf_useful, llc_pf_useless`
 
-**WP 専用（`log_format=wp_capable` のみ）**
+**WP 専用**
 - `llc_wp_access, llc_wp_useful`（WP demand fill）
 - `llc_pol_cp_miss`（correct-path LLC miss）
 - `l2c_pf_useful, l2c_pf_useless`（L2C prefetch quality）
 - `l2c_pollution`（L2C 汚染比率）
+
+### ノーマルスキーマ時（全行 normal）
+
+WP 専用列は列ごと出力しない。
+
+**識別**
+- `bench, config, log_format, wp_mode, parse_warnings`
+
+**ROI コア**
+- `cycles, inst, ipc`（`wp_cycles` は列なし）
+
+**Branch**
+- `branch_mpki`
+
+**LLC**
+- `llc_load_miss, llc_load_mpki, llc_miss_lat`
+- `llc_pf_useful, llc_pf_useless`
+
+**L2C**
+- `l2c_pf_useful, l2c_pf_useless`
 
 除外の根拠:
 
@@ -292,9 +334,6 @@ CSV ヘッダ固定:
 - Pipeline stats: 詳細分析時のみ参照。full_metrics に存在
 - `branch_acc_percent`: MPKI で代表
 - DATA REQ 詳細: full_metrics 参照
-
-注: `wp_useful_percent` は `llc_wp_useful / llc_wp_access * 100` として summary 側で算出可。
-現版では full_metrics.csv の値を参照することを推奨。
 
 ---
 
